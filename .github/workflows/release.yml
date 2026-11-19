@@ -47,7 +47,6 @@ jobs:
           chmod +x scripts/package-macos.sh
           ./scripts/package-macos.sh "${{ steps.ver.outputs.num }}" "${{ matrix.arch }}"
       - name: Optional Apple Developer Signing & Notarization
-        if: ${{ secrets.MACOS_CERT_P12 != '' && secrets.MACOS_SIGN_IDENTITY != '' }}
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -56,6 +55,10 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          if [ -z "$MACOS_CERT_P12" ] || [ -z "$MACOS_SIGN_IDENTITY" ]; then
+            echo "Skipping Apple signing (secrets not configured)."
+            exit 0
+          fi
           KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
           security create-keychain -p "temp" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
