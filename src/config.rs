@@ -72,6 +72,7 @@ pub struct AppConfig {
     pub agent_mode: bool,
     pub agent_split_diff: bool,
     pub agent_all_files_feed: bool,
+    pub auto_check_remote: bool,
     pub open_tabs: Vec<String>,
     pub recent_repos: Vec<String>,
 }
@@ -92,6 +93,7 @@ impl Default for AppConfig {
             agent_mode: false,
             agent_split_diff: true,
             agent_all_files_feed: false,
+            auto_check_remote: false,
             open_tabs: Vec::new(),
             recent_repos: Vec::new(),
         }
@@ -168,6 +170,9 @@ impl AppConfig {
                     "agent_all_files_feed" => {
                         cfg.agent_all_files_feed = val.trim() == "true";
                     }
+                    "auto_check_remote" => {
+                        cfg.auto_check_remote = val.trim() == "true";
+                    }
                     "tab" => {
                         let p = val.trim().to_string();
                         if !p.is_empty() && !cfg.open_tabs.contains(&p) {
@@ -214,6 +219,7 @@ impl AppConfig {
             "agent_all_files_feed={}\n",
             self.agent_all_files_feed
         ));
+        out.push_str(&format!("auto_check_remote={}\n", self.auto_check_remote));
         for t in self.open_tabs.iter().take(12) {
             out.push_str(&format!("tab={t}\n"));
         }

@@ -285,8 +285,12 @@ impl GitKrakenApp {
         self.remote_check_rx = None;
     }
 
-    /// One-shot lightweight background check for remote updates (0% idle CPU, drops thread immediately).
+    /// One-shot lightweight background check for remote updates (opt-in via Settings).
     pub fn spawn_remote_check(&mut self, ctx: Option<egui::Context>) {
+        if !self.config.auto_check_remote {
+            self.remote_updates_available = false;
+            return;
+        }
         let Some(repo) = self.repo.clone() else {
             return;
         };

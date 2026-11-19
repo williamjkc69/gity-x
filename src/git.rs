@@ -288,8 +288,10 @@ impl GitRepo {
         let ref_spec = format!("refs/heads/{branch}");
 
         let Ok(out) = new_git_command()
-            .args(["ls-remote", remote, &ref_spec])
+            .args(["-c", "credential.interactive=never", "ls-remote", remote, &ref_spec])
             .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never")
+            .env("GIT_ASKPASS", "")
             .current_dir(&self.path)
             .output()
         else {

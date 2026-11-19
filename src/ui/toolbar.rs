@@ -1240,6 +1240,22 @@ fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
                 need_save = true;
             }
 
+            ui.add_space(4.0);
+            if ui
+                .checkbox(
+                    &mut app.config.auto_check_remote,
+                    t.auto_check_remote_label,
+                )
+                .changed()
+            {
+                need_save = true;
+                if app.config.auto_check_remote {
+                    app.spawn_remote_check(Some(ctx.clone()));
+                } else {
+                    app.remote_updates_available = false;
+                }
+            }
+
             ui.add_space(12.0);
             ui.separator();
             ui.horizontal(|ui| {
