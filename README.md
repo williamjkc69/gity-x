@@ -88,10 +88,37 @@ cargo run --release -- /path/to/your/repo
 
 Prebuilt installers are published automatically on every release tag in **[GitHub Releases](https://github.com/williamjkc69/gity-x/releases)**:
 
-- **macOS (Apple Silicon / Intel)**: `gity-x-vX.Y.Z-macos-arm64.dmg` / `gity-x-vX.Y.Z-macos-x64.dmg`
-- **Windows (x64)**: `gity-x-vX.Y.Z-windows-x64.exe`
-- **Ubuntu / Debian**: `gity-x-vX.Y.Z-linux-amd64.deb` (`sudo apt install ./gity-x-*.deb`)
-- **Linux Universal**: `gity-x-vX.Y.Z-linux-x86_64.AppImage` (`chmod +x *.AppImage && ./gity-x-*.AppImage`)
+### macOS (Apple Silicon & Intel)
+
+**Recommended 1-line install** (auto-detects arm64/Intel & clears unsigned Gatekeeper quarantine):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/williamjkc69/gity-x/master/scripts/install-macos.sh | bash
+```
+
+Or download `gity-x-vX.Y.Z-macos-arm64.dmg` / `gity-x-vX.Y.Z-macos-x64.dmg`, drag **gity x** to **Applications**, and run:
+
+```bash
+xattr -cr "/Applications/gity x.app"
+```
+
+*(Until signed with a paid Apple Developer ID certificate, macOS Gatekeeper flags browser-downloaded unsigned `.dmg` apps. Alternatively open **System Settings → Privacy & Security → Open Anyway**.)*
+
+### Windows (x64)
+
+Download `gity-x-vX.Y.Z-windows-x64.exe` from Releases. If Windows SmartScreen warns about an unsigned publisher, click **More info → Run anyway**.
+
+### Ubuntu / Linux
+
+- **Debian / Ubuntu (`.deb`)**:
+  ```bash
+  sudo apt install ./gity-x-v*-linux-amd64.deb
+  ```
+- **Universal Linux (`.AppImage`)**:
+  ```bash
+  chmod +x gity-x-v*-linux-x86_64.AppImage
+  ./gity-x-v*-linux-x86_64.AppImage
+  ```
 
 ### Creating a New Release Version
 
