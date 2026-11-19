@@ -5,7 +5,10 @@ edition = "2021"
 authors = ["williamjkc69"]
 license = "MIT"
 repository = "https://github.com/williamjkc69/gity-x"
-description = "Fast, lightweight cross-platform Git GUI in Rust inspired by GitKraken and VS Code Git Graph"
+homepage = "https://github.com/williamjkc69/gity-x/releases/latest"
+keywords = ["git", "git-gui", "git-client", "git-graph", "egui"]
+categories = ["development-tools", "gui"]
+description = "Fast, lightweight cross-platform Git GUI & visual commit graph client built in Rust (macOS, Windows, Linux)"
 
 [dependencies]
 eframe = "0.29"
