@@ -70,12 +70,30 @@ You can also pass a repository path directly:
 cargo run --release -- /path/to/your/repo
 ```
 
-## Cross-Platform Packaging Roadmap
+## Downloads (macOS, Windows, Ubuntu / Linux)
 
-Planned automated GitHub Releases builds for:
-- **macOS**: Universal `.dmg` app bundle
-- **Windows**: `.exe` / `.msi` installer
-- **Ubuntu / Linux**: `.deb` & `.AppImage`
+Prebuilt installers are published automatically on every release tag in **[GitHub Releases](https://github.com/williamjkc69/gity-x/releases)**:
+
+- **macOS (Apple Silicon / Intel)**: `gity-x-vX.Y.Z-macos-arm64.dmg` / `gity-x-vX.Y.Z-macos-x64.dmg`
+- **Windows (x64)**: `gity-x-vX.Y.Z-windows-x64.exe`
+- **Ubuntu / Debian**: `gity-x-vX.Y.Z-linux-amd64.deb` (`sudo apt install ./gity-x-*.deb`)
+- **Linux Universal**: `gity-x-vX.Y.Z-linux-x86_64.AppImage` (`chmod +x *.AppImage && ./gity-x-*.AppImage`)
+
+### Creating a New Release Version
+
+Push any semantic version tag (`vX.Y.Z`) to automatically build and publish `.dmg`, `.exe`, `.deb`, and `.AppImage` via GitHub Actions:
+
+```bash
+git tag -a v0.2.1 -m "Release v0.2.1"
+git push origin v0.2.1
+```
+
+### Build Local macOS `.dmg`
+
+```bash
+./scripts/package-macos.sh 0.2.1
+# Output: dist/gity-x-v0.2.1-macos-arm64.dmg
+```
 
 ## Author
 

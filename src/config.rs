@@ -100,12 +100,19 @@ impl Default for AppConfig {
 
 impl AppConfig {
     fn config_path() -> Option<PathBuf> {
-        std::env::var_os("HOME").map(|h| {
-            PathBuf::from(h)
-                .join(".config")
-                .join("gity-x")
-                .join("config.txt")
-        })
+        #[cfg(target_os = "windows")]
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return Some(PathBuf::from(appdata).join("gity-x").join("config.txt"));
+        }
+
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(|h| {
+                PathBuf::from(h)
+                    .join(".config")
+                    .join("gity-x")
+                    .join("config.txt")
+            })
     }
 
     pub fn load() -> Self {

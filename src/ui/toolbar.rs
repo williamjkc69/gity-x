@@ -1358,9 +1358,12 @@ fn show_about_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
                         .color(theme::ACCENT_CYAN),
                 );
                 ui.label(
-                    RichText::new("v0.2.0 • Native Rust Git Client")
-                        .size(12.0)
-                        .color(theme::TEXT_SECONDARY),
+                    RichText::new(format!(
+                        "v{} • Native Rust Git Client",
+                        env!("CARGO_PKG_VERSION")
+                    ))
+                    .size(12.0)
+                    .color(theme::TEXT_SECONDARY),
                 );
                 ui.add_space(4.0);
                 ui.label(

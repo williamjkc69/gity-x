@@ -52,48 +52,21 @@ pub fn lane_color(idx: usize) -> Color32 {
 
 pub const ICON_PNG_BYTES: &[u8] = include_bytes!("../assets/icon.png");
 
-/// Decodes the embedded icon and applies an anti-aliased macOS squircle alpha mask
-/// so the outer margin is fully transparent in Cmd+Tab, Dock, and UI.
-fn decode_masked_icon_rgba() -> Option<(Vec<u8>, u32, u32)> {
-    let src = image::load_from_memory(ICON_PNG_BYTES).ok()?.to_rgba8();
-    let (w, h) = src.dimensions();
-    let mut out = src.into_raw();
-
-    // The squircle in the source image spans roughly [0.125, 0.875] with corner radius ~0.155
-    let cx = (w as f32) * 0.5;
-    let cy = (h as f32) * 0.5;
-    let half = (w.min(h) as f32) * 0.372;
-    let radius = half * 0.43;
-    let inner = half - radius;
-
-    for y in 0..h {
-        for x in 0..w {
-            let dx = ((x as f32 + 0.5) - cx).abs() - inner;
-            let dy = ((y as f32 + 0.5) - cy).abs() - inner;
-            let dist = (dx.max(0.0).hypot(dy.max(0.0))) + dx.max(dy).min(0.0) - radius;
-
-            // Smooth 1.5px anti-aliased alpha falloff
-            let alpha = (0.5 - dist / 1.5).clamp(0.0, 1.0);
-            let idx = ((y * w + x) * 4) as usize;
-            out[idx + 3] = (alpha * 255.0).round() as u8;
-        }
-    }
-
-    Some((out, w, h))
-}
-
 pub fn load_window_icon() -> Option<egui::IconData> {
-    let (rgba, width, height) = decode_masked_icon_rgba()?;
+    let img = image::load_from_memory(ICON_PNG_BYTES).ok()?.to_rgba8();
+    let (width, height) = img.dimensions();
     Some(egui::IconData {
-        rgba,
+        rgba: img.into_raw(),
         width,
         height,
     })
 }
 
 pub fn load_logo_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    let (rgba, w, h) = decode_masked_icon_rgba()?;
-    let color_image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+    let img = image::load_from_memory(ICON_PNG_BYTES).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    let color_image =
+        egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw());
     Some(ctx.load_texture("gity_x_logo", color_image, egui::TextureOptions::LINEAR))
 }
 

@@ -1097,9 +1097,5 @@ pub fn app_logo_image<'a>(
     tex.map(|t| {
         egui::Image::new((t.id(), egui::vec2(size, size)))
             .rounding(egui::Rounding::same(rounding))
-            .uv(egui::Rect::from_min_max(
-                egui::pos2(0.11, 0.11),
-                egui::pos2(0.89, 0.89),
-            ))
     })
 }

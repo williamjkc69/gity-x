@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use muda::{
     accelerator::{Accelerator, Code, Modifiers},
     Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
@@ -26,15 +27,21 @@ pub const ID_GIT_STASH: &str = "git_stash";
 pub const ID_GIT_POP: &str = "git_pop";
 
 pub struct NativeMenuBar {
+    #[cfg(target_os = "macos")]
     _menu: Menu,
 }
 
 impl NativeMenuBar {
+    #[cfg(not(target_os = "macos"))]
+    pub fn init() -> Option<Self> {
+        None
+    }
+
+    #[cfg(target_os = "macos")]
     pub fn init() -> Option<Self> {
         let menu = Menu::new();
         let cmd = Modifiers::SUPER;
 
-        // App menu ("gity x")
         let app_menu = Submenu::new("gity x", true);
         let _ = app_menu.append_items(&[
             &MenuItem::with_id(ID_ABOUT, "About gity x", true, None),
@@ -59,7 +66,6 @@ impl NativeMenuBar {
             &PredefinedMenuItem::quit(Some("Quit gity x")),
         ]);
 
-        // File menu
         let file_menu = Submenu::new("File", true);
         let _ = file_menu.append_items(&[
             &MenuItem::with_id(
@@ -89,7 +95,6 @@ impl NativeMenuBar {
             ),
         ]);
 
-        // Edit menu (standard macOS clipboard actions)
         let edit_menu = Submenu::new("Edit", true);
         let _ = edit_menu.append_items(&[
             &PredefinedMenuItem::undo(None),
@@ -101,7 +106,6 @@ impl NativeMenuBar {
             &PredefinedMenuItem::select_all(None),
         ]);
 
-        // View menu
         let view_menu = Submenu::new("View", true);
         let _ = view_menu.append_items(&[
             &MenuItem::with_id(ID_MODE_GRAPH, "Git Graph Mode", true, None),
@@ -133,7 +137,6 @@ impl NativeMenuBar {
             ),
         ]);
 
-        // Git menu
         let git_menu = Submenu::new("Git", true);
         let _ = git_menu.append_items(&[
             &MenuItem::with_id(ID_GIT_FETCH, "Fetch", true, None),
@@ -145,7 +148,6 @@ impl NativeMenuBar {
             &MenuItem::with_id(ID_GIT_POP, "Pop Stash", true, None),
         ]);
 
-        // Help menu
         let help_menu = Submenu::new("Help", true);
         let _ = help_menu.append_items(&[
             &MenuItem::with_id(ID_SHORTCUTS, "Keyboard Shortcuts", true, None),
@@ -161,17 +163,23 @@ impl NativeMenuBar {
             &help_menu,
         ]);
 
-        #[cfg(target_os = "macos")]
         menu.init_for_nsapp();
 
         Some(Self { _menu: menu })
     }
 
     pub fn poll_events() -> Vec<String> {
-        let mut events = Vec::new();
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            events.push(event.id.0);
+        #[cfg(target_os = "macos")]
+        {
+            let mut events = Vec::new();
+            while let Ok(event) = MenuEvent::receiver().try_recv() {
+                events.push(event.id.0);
+            }
+            events
         }
-        events
+        #[cfg(not(target_os = "macos"))]
+        {
+            Vec::new()
+        }
     }
 }

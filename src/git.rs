@@ -2,7 +2,21 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use crate::config::CommitOrder;
+
+#[allow(unused_mut)]
+fn new_git_command() -> Command {
+    let mut cmd = Command::new("git");
+    #[cfg(target_os = "windows")]
+    {
+        // CREATE_NO_WINDOW prevents black console popups on Windows when invoking git
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefKind {
@@ -138,7 +152,7 @@ impl GitRepo {
             return Err(format!("Folder does not exist: {}", target.display()));
         }
 
-        let output = Command::new("git")
+        let output = new_git_command()
             .arg("rev-parse")
             .arg("--show-toplevel")
             .current_dir(&target)
@@ -172,7 +186,7 @@ impl GitRepo {
     }
 
     fn run_git(&self, args: &[&str]) -> Result<String, String> {
-        let output = Command::new("git")
+        let output = new_git_command()
             .args(args)
             .current_dir(&self.path)
             .output()
@@ -273,7 +287,7 @@ impl GitRepo {
         let local_remote_sha = local_remote_sha.trim();
         let ref_spec = format!("refs/heads/{branch}");
 
-        let Ok(out) = Command::new("git")
+        let Ok(out) = new_git_command()
             .args(["ls-remote", remote, &ref_spec])
             .env("GIT_TERMINAL_PROMPT", "0")
             .current_dir(&self.path)
