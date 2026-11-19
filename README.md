@@ -12,6 +12,20 @@
 
 ---
 
+## Preview
+
+### Git Graph Mode
+Visual commit tree with multi-colored Bézier lanes, branch/tag badges, multi-repo tabs, per-column hover tooltips, and commit diff inspector.
+
+![gity x — Git Graph Mode](assets/screenshots/git-graph.png)
+
+### Agent Mode (Maximized Working Changes)
+Full-width review for Unstaged, Untracked, Staged files, and Stashes with Split (Side-by-Side) and Unified diffs.
+
+![gity x — Agent Mode](assets/screenshots/agent-mode.png)
+
+---
+
 ## Features
 
 - **Visual Git Commit Graph**: Color-coded lanes, Rounded (Bézier) & Angular edge styles, `HEAD` ring, distinct merge nodes, `WIP` row, and branch/remote/tag badges.
