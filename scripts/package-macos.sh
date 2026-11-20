@@ -61,6 +61,11 @@ EOF
 # Ad-hoc sign so macOS doesn't complain about broken signature locally
 codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
 
+TAR_PATH="$DIST_DIR/${BIN_NAME}-v${VERSION}-macos-${ARCH_LABEL}.tar.gz"
+rm -f "$TAR_PATH"
+echo "==> Creating auto-update archive at $TAR_PATH..."
+tar -czf "$TAR_PATH" -C "$STAGE_DIR" "$APP_NAME.app"
+
 ln -s /Applications "$STAGE_DIR/Applications"
 
 echo "==> Creating DMG at $DMG_PATH..."

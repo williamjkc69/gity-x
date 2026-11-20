@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::i18n::Language;
+use crate::providers::ProviderAuth;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphStyle {
@@ -73,6 +74,11 @@ pub struct AppConfig {
     pub agent_split_diff: bool,
     pub agent_all_files_feed: bool,
     pub auto_check_remote: bool,
+    pub auto_update: bool,
+    pub github_token: String,
+    pub gitlab_token: String,
+    pub bitbucket_user: String,
+    pub bitbucket_token: String,
     pub open_tabs: Vec<String>,
     pub recent_repos: Vec<String>,
 }
@@ -94,6 +100,11 @@ impl Default for AppConfig {
             agent_split_diff: true,
             agent_all_files_feed: false,
             auto_check_remote: false,
+            auto_update: true,
+            github_token: String::new(),
+            gitlab_token: String::new(),
+            bitbucket_user: String::new(),
+            bitbucket_token: String::new(),
             open_tabs: Vec::new(),
             recent_repos: Vec::new(),
         }
@@ -173,6 +184,21 @@ impl AppConfig {
                     "auto_check_remote" => {
                         cfg.auto_check_remote = val.trim() == "true";
                     }
+                    "auto_update" => {
+                        cfg.auto_update = val.trim() == "true";
+                    }
+                    "github_token" => {
+                        cfg.github_token = val.trim().to_string();
+                    }
+                    "gitlab_token" => {
+                        cfg.gitlab_token = val.trim().to_string();
+                    }
+                    "bitbucket_user" => {
+                        cfg.bitbucket_user = val.trim().to_string();
+                    }
+                    "bitbucket_token" => {
+                        cfg.bitbucket_token = val.trim().to_string();
+                    }
                     "tab" => {
                         let p = val.trim().to_string();
                         if !p.is_empty() && !cfg.open_tabs.contains(&p) {
@@ -220,13 +246,41 @@ impl AppConfig {
             self.agent_all_files_feed
         ));
         out.push_str(&format!("auto_check_remote={}\n", self.auto_check_remote));
+        out.push_str(&format!("auto_update={}\n", self.auto_update));
+        if !self.github_token.trim().is_empty() {
+            out.push_str(&format!("github_token={}\n", self.github_token.trim()));
+        }
+        if !self.gitlab_token.trim().is_empty() {
+            out.push_str(&format!("gitlab_token={}\n", self.gitlab_token.trim()));
+        }
+        if !self.bitbucket_user.trim().is_empty() {
+            out.push_str(&format!("bitbucket_user={}\n", self.bitbucket_user.trim()));
+        }
+        if !self.bitbucket_token.trim().is_empty() {
+            out.push_str(&format!("bitbucket_token={}\n", self.bitbucket_token.trim()));
+        }
         for t in self.open_tabs.iter().take(12) {
             out.push_str(&format!("tab={t}\n"));
         }
         for r in self.recent_repos.iter().take(8) {
             out.push_str(&format!("recent={r}\n"));
         }
-        let _ = std::fs::write(path, out);
+        if std::fs::write(&path, out).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+
+    pub fn provider_auth(&self) -> ProviderAuth {
+        ProviderAuth {
+            github_token: self.github_token.clone(),
+            gitlab_token: self.gitlab_token.clone(),
+            bitbucket_user: self.bitbucket_user.clone(),
+            bitbucket_token: self.bitbucket_token.clone(),
+        }
     }
 
     pub fn add_recent(&mut self, repo_path: &str) {

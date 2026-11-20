@@ -12,8 +12,72 @@ use crate::git::{
 use crate::graph::CommitGraph;
 use crate::i18n::{tr, Strings};
 use crate::native_menu::{self, NativeMenuBar};
+use crate::providers::{
+    self, MergeStrategy, PrStateFilter, PullRequestDetail, PullRequestSummary, RemoteSpec,
+};
 use crate::theme;
 use crate::ui;
+use crate::updater::{self, ReleaseUpdate, UpdateState};
+
+enum UpdateAsyncMsg {
+    Checked {
+        manual: bool,
+        res: Result<Option<ReleaseUpdate>, String>,
+    },
+    Progress {
+        version: String,
+        progress: f32,
+    },
+    Installed {
+        version: String,
+        res: Result<PathBuf, String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Graph,
+    Agent,
+    PullRequests,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrDetailTab {
+    Conversation,
+    Commits,
+    Files,
+}
+
+#[derive(Debug, Clone)]
+pub enum PrActionKind {
+    Approve,
+    RequestChanges(String),
+    Comment(String),
+    Merge(MergeStrategy),
+    CloseOrDecline,
+    Reopen,
+}
+
+enum PrAsyncMsg {
+    ListLoaded {
+        repo_path: PathBuf,
+        req_id: u64,
+        res: Result<Vec<PullRequestSummary>, String>,
+    },
+    DetailLoaded {
+        repo_path: PathBuf,
+        number: u64,
+        req_id: u64,
+        res: Result<PullRequestDetail, String>,
+    },
+    ActionDone {
+        repo_path: PathBuf,
+        number: u64,
+        merged: bool,
+        res: Result<String, String>,
+    },
+    GhCliStatus(bool),
+}
 
 #[derive(Debug, Clone)]
 pub struct RepoTab {
@@ -117,6 +181,33 @@ pub struct GitKrakenApp {
     pub agent_target: AgentTarget,
     pub agent_stash_diff: String,
 
+    // Unified Pull Requests (GitHub / GitLab / Bitbucket)
+    pub view_mode: ViewMode,
+    pub remote_spec: Option<RemoteSpec>,
+    pub pr_list: Vec<PullRequestSummary>,
+    pub pr_filter: PrStateFilter,
+    pub pr_search: String,
+    pub pr_selected: Option<u64>,
+    pub pr_detail: Option<PullRequestDetail>,
+    pub pr_detail_tab: PrDetailTab,
+    pub pr_merge_strategy: MergeStrategy,
+    pub pr_comment_draft: String,
+    pub pr_loading_list: bool,
+    pub pr_loading_detail: bool,
+    pub pr_action_busy: bool,
+    pr_list_loaded_once: bool,
+    pub gh_cli_detected: bool,
+    gh_cli_checked: bool,
+    pr_list_req_id: u64,
+    pr_detail_req_id: u64,
+    pr_tx: mpsc::Sender<PrAsyncMsg>,
+    pr_rx: mpsc::Receiver<PrAsyncMsg>,
+
+    pub update_state: UpdateState,
+    update_tx: mpsc::Sender<UpdateAsyncMsg>,
+    update_rx: mpsc::Receiver<UpdateAsyncMsg>,
+    did_startup_update_check: bool,
+
     pub selection: Selection,
     pub compare_base: Option<String>,
     pub selected_commit_files: Vec<CommitFileChange>,
@@ -152,6 +243,13 @@ impl GitKrakenApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial_path: Option<PathBuf>) -> Self {
         theme::apply_theme(&cc.egui_ctx);
         let config = AppConfig::load();
+        let initial_view_mode = if config.agent_mode {
+            ViewMode::Agent
+        } else {
+            ViewMode::Graph
+        };
+        let (pr_tx, pr_rx) = mpsc::channel();
+        let (update_tx, update_rx) = mpsc::channel();
 
         let mut app = Self {
             config,
@@ -179,6 +277,30 @@ impl GitKrakenApp {
             agent_diffs: HashMap::new(),
             agent_target: AgentTarget::None,
             agent_stash_diff: String::new(),
+            view_mode: initial_view_mode,
+            remote_spec: None,
+            pr_list: Vec::new(),
+            pr_filter: PrStateFilter::Open,
+            pr_search: String::new(),
+            pr_selected: None,
+            pr_detail: None,
+            pr_detail_tab: PrDetailTab::Conversation,
+            pr_merge_strategy: MergeStrategy::Merge,
+            pr_comment_draft: String::new(),
+            pr_loading_list: false,
+            pr_loading_detail: false,
+            pr_action_busy: false,
+            pr_list_loaded_once: false,
+            gh_cli_detected: false,
+            gh_cli_checked: false,
+            pr_list_req_id: 0,
+            pr_detail_req_id: 0,
+            pr_tx,
+            pr_rx,
+            update_state: UpdateState::Idle,
+            update_tx,
+            update_rx,
+            did_startup_update_check: false,
             selection: Selection::None,
             compare_base: None,
             selected_commit_files: Vec::new(),
@@ -283,6 +405,18 @@ impl GitKrakenApp {
         self.selection = Selection::None;
         self.remote_updates_available = false;
         self.remote_check_rx = None;
+        self.remote_spec = None;
+        self.pr_list.clear();
+        self.pr_list.shrink_to_fit();
+        self.pr_selected = None;
+        self.pr_detail = None;
+        self.pr_comment_draft.clear();
+        self.pr_loading_list = false;
+        self.pr_loading_detail = false;
+        self.pr_action_busy = false;
+        self.pr_list_loaded_once = false;
+        self.pr_list_req_id = self.pr_list_req_id.wrapping_add(1);
+        self.pr_detail_req_id = self.pr_detail_req_id.wrapping_add(1);
     }
 
     /// One-shot lightweight background check for remote updates (opt-in via Settings).
@@ -443,6 +577,9 @@ impl GitKrakenApp {
             }
         }
         self.ahead_behind = repo.ahead_behind();
+        self.remote_spec = repo
+            .remote_origin_url()
+            .and_then(|url| providers::parse_remote_url(&url));
         self.is_cherry_picking = repo.is_cherry_picking();
         self.is_merging = repo.is_merging();
         self.is_rebasing = repo.is_rebasing();
@@ -731,14 +868,143 @@ impl GitKrakenApp {
         self.config.save();
     }
 
-    pub fn set_agent_mode(&mut self, enabled: bool) {
-        if self.config.agent_mode != enabled {
-            self.config.agent_mode = enabled;
-            self.config.save();
-            if enabled {
-                self.refresh();
-            }
+    pub fn set_view_mode(&mut self, mode: ViewMode, ctx: Option<egui::Context>) {
+        if self.view_mode == mode {
+            return;
         }
+        self.view_mode = mode;
+        let agent = mode == ViewMode::Agent;
+        if self.config.agent_mode != agent {
+            self.config.agent_mode = agent;
+            self.config.save();
+        }
+        match mode {
+            ViewMode::Agent => self.refresh(),
+            ViewMode::PullRequests => {
+                if !self.pr_list_loaded_once && !self.pr_loading_list {
+                    self.fetch_pr_list(ctx);
+                }
+            }
+            ViewMode::Graph => {}
+        }
+    }
+
+    pub fn set_agent_mode(&mut self, enabled: bool) {
+        let mode = if enabled {
+            ViewMode::Agent
+        } else {
+            ViewMode::Graph
+        };
+        self.set_view_mode(mode, None);
+    }
+
+    pub fn check_gh_cli_once(&mut self, ctx: egui::Context) {
+        if self.gh_cli_checked {
+            return;
+        }
+        self.gh_cli_checked = true;
+        let tx = self.pr_tx.clone();
+        std::thread::spawn(move || {
+            let auth = providers::ProviderAuth::default();
+            let detected = auth.resolve_github_token().is_some();
+            let _ = tx.send(PrAsyncMsg::GhCliStatus(detected));
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn fetch_pr_list(&mut self, ctx: Option<egui::Context>) {
+        let Some(repo) = self.repo.as_ref() else {
+            return;
+        };
+        let Some(spec) = self.remote_spec.clone() else {
+            return;
+        };
+        let repo_path = repo.path.clone();
+        let auth = self.config.provider_auth();
+        let filter = self.pr_filter;
+        self.pr_loading_list = true;
+        self.pr_list_loaded_once = true;
+        self.pr_list_req_id = self.pr_list_req_id.wrapping_add(1);
+        let req_id = self.pr_list_req_id;
+        let tx = self.pr_tx.clone();
+
+        std::thread::spawn(move || {
+            let res = providers::create_provider(spec, &auth)
+                .and_then(|provider| provider.list_prs(filter));
+            let _ = tx.send(PrAsyncMsg::ListLoaded {
+                repo_path,
+                req_id,
+                res,
+            });
+            if let Some(c) = ctx {
+                c.request_repaint();
+            }
+        });
+    }
+
+    pub fn fetch_pr_detail(&mut self, number: u64, ctx: Option<egui::Context>) {
+        let Some(repo) = self.repo.as_ref() else {
+            return;
+        };
+        let Some(spec) = self.remote_spec.clone() else {
+            return;
+        };
+        let repo_path = repo.path.clone();
+        let auth = self.config.provider_auth();
+        self.pr_selected = Some(number);
+        self.pr_loading_detail = true;
+        self.pr_detail_req_id = self.pr_detail_req_id.wrapping_add(1);
+        let req_id = self.pr_detail_req_id;
+        let tx = self.pr_tx.clone();
+
+        std::thread::spawn(move || {
+            let res = providers::create_provider(spec, &auth)
+                .and_then(|provider| provider.get_pr_detail(number));
+            let _ = tx.send(PrAsyncMsg::DetailLoaded {
+                repo_path,
+                number,
+                req_id,
+                res,
+            });
+            if let Some(c) = ctx {
+                c.request_repaint();
+            }
+        });
+    }
+
+    pub fn run_pr_action(&mut self, number: u64, action: PrActionKind, ctx: egui::Context) {
+        if self.pr_action_busy {
+            return;
+        }
+        let Some(repo) = self.repo.as_ref() else {
+            return;
+        };
+        let Some(spec) = self.remote_spec.clone() else {
+            return;
+        };
+        let repo_path = repo.path.clone();
+        let auth = self.config.provider_auth();
+        let merged = matches!(action, PrActionKind::Merge(_));
+        self.pr_action_busy = true;
+        let tx = self.pr_tx.clone();
+
+        std::thread::spawn(move || {
+            let res = providers::create_provider(spec, &auth).and_then(|provider| match action {
+                PrActionKind::Approve => provider.approve_pr(number),
+                PrActionKind::RequestChanges(body) => provider.request_changes(number, &body),
+                PrActionKind::Comment(body) => provider.add_comment(number, &body),
+                PrActionKind::Merge(strategy) => provider.merge_pr(number, strategy),
+                PrActionKind::CloseOrDecline => provider.close_or_decline_pr(number),
+                PrActionKind::Reopen => provider.reopen_pr(number),
+            });
+            let _ = tx.send(PrAsyncMsg::ActionDone {
+                repo_path,
+                number,
+                merged,
+                res,
+            });
+            ctx.request_repaint();
+        });
     }
 
     pub fn select_agent_file(&mut self, path: String, staged: bool, untracked: bool) {
@@ -815,7 +1081,7 @@ impl GitKrakenApp {
 }
 
 impl GitKrakenApp {
-    fn handle_native_menu_events(&mut self) {
+    fn handle_native_menu_events(&mut self, ctx: &egui::Context) {
         let t = self.t();
         for id in NativeMenuBar::poll_events() {
             match id.as_str() {
@@ -839,15 +1105,21 @@ impl GitKrakenApp {
                 native_menu::ID_REFRESH => {
                     if self.repo.is_some() {
                         self.refresh();
-                        self.spawn_remote_check(None);
+                        self.spawn_remote_check(Some(ctx.clone()));
+                        if self.view_mode == ViewMode::PullRequests {
+                            self.fetch_pr_list(Some(ctx.clone()));
+                        }
                         self.set_info(t.msg_refreshed);
                     }
                 }
                 native_menu::ID_MODE_GRAPH => {
-                    self.set_agent_mode(false);
+                    self.set_view_mode(ViewMode::Graph, Some(ctx.clone()));
                 }
                 native_menu::ID_MODE_AGENT => {
-                    self.set_agent_mode(true);
+                    self.set_view_mode(ViewMode::Agent, Some(ctx.clone()));
+                }
+                native_menu::ID_MODE_PRS => {
+                    self.set_view_mode(ViewMode::PullRequests, Some(ctx.clone()));
                 }
                 native_menu::ID_TOGGLE_LEFT => {
                     self.toggle_left_sidebar();
@@ -887,6 +1159,201 @@ impl GitKrakenApp {
             }
         }
     }
+
+    fn drain_pr_events(&mut self, ctx: &egui::Context) {
+        let mut auto_fetch_detail: Option<u64> = None;
+        let mut reload_after_action: Option<(u64, bool)> = None;
+
+        while let Ok(msg) = self.pr_rx.try_recv() {
+            match msg {
+                PrAsyncMsg::ListLoaded {
+                    repo_path,
+                    req_id,
+                    res,
+                } => {
+                    if self.repo.as_ref().map(|r| &r.path) != Some(&repo_path)
+                        || req_id != self.pr_list_req_id
+                    {
+                        continue;
+                    }
+                    self.pr_loading_list = false;
+                    match res {
+                        Ok(list) => {
+                            let still_exists = self
+                                .pr_selected
+                                .is_some_and(|sel| list.iter().any(|p| p.number == sel));
+                            if !still_exists {
+                                self.pr_selected = None;
+                                self.pr_detail = None;
+                                if let Some(first) = list.first() {
+                                    auto_fetch_detail = Some(first.number);
+                                }
+                            }
+                            self.pr_list = list;
+                        }
+                        Err(err) => {
+                            self.set_error(err);
+                        }
+                    }
+                }
+                PrAsyncMsg::DetailLoaded {
+                    repo_path,
+                    number,
+                    req_id,
+                    res,
+                } => {
+                    if self.repo.as_ref().map(|r| &r.path) != Some(&repo_path)
+                        || req_id != self.pr_detail_req_id
+                    {
+                        continue;
+                    }
+                    self.pr_loading_detail = false;
+                    match res {
+                        Ok(detail) => {
+                            self.pr_selected = Some(number);
+                            self.pr_detail = Some(detail);
+                        }
+                        Err(err) => {
+                            self.set_error(err);
+                        }
+                    }
+                }
+                PrAsyncMsg::ActionDone {
+                    repo_path,
+                    number,
+                    merged,
+                    res,
+                } => {
+                    if self.repo.as_ref().map(|r| &r.path) != Some(&repo_path) {
+                        continue;
+                    }
+                    self.pr_action_busy = false;
+                    match res {
+                        Ok(ok_msg) => {
+                            self.set_info(ok_msg);
+                            self.pr_comment_draft.clear();
+                            reload_after_action = Some((number, merged));
+                        }
+                        Err(err) => {
+                            self.set_error(err);
+                        }
+                    }
+                }
+                PrAsyncMsg::GhCliStatus(detected) => {
+                    self.gh_cli_detected = detected;
+                }
+            }
+        }
+
+        if let Some((num, merged)) = reload_after_action {
+            self.fetch_pr_list(Some(ctx.clone()));
+            self.fetch_pr_detail(num, Some(ctx.clone()));
+            if merged {
+                self.refresh();
+            }
+        } else if let Some(num) = auto_fetch_detail {
+            self.fetch_pr_detail(num, Some(ctx.clone()));
+        }
+    }
+
+    pub fn check_for_updates(&mut self, ctx: egui::Context, manual: bool) {
+        if matches!(
+            self.update_state,
+            UpdateState::Checking | UpdateState::Downloading { .. }
+        ) {
+            return;
+        }
+        self.update_state = UpdateState::Checking;
+        let tx = self.update_tx.clone();
+        std::thread::spawn(move || {
+            let res = updater::check_latest_release();
+            let _ = tx.send(UpdateAsyncMsg::Checked { manual, res });
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn start_update_download(&mut self, update: ReleaseUpdate, ctx: egui::Context) {
+        if matches!(self.update_state, UpdateState::Downloading { .. }) {
+            return;
+        }
+        let version = update.version.clone();
+        self.update_state = UpdateState::Downloading {
+            version: version.clone(),
+            progress: 0.0,
+        };
+        let tx = self.update_tx.clone();
+        std::thread::spawn(move || {
+            let progress_tx = tx.clone();
+            let progress_ver = version.clone();
+            let progress_ctx = ctx.clone();
+            let res = updater::download_and_install(&update, move |pct| {
+                let _ = progress_tx.send(UpdateAsyncMsg::Progress {
+                    version: progress_ver.clone(),
+                    progress: pct,
+                });
+                progress_ctx.request_repaint();
+            });
+            let _ = tx.send(UpdateAsyncMsg::Installed { version, res });
+            ctx.request_repaint();
+        });
+    }
+
+    fn drain_update_events(&mut self, ctx: &egui::Context) {
+        let mut auto_download: Option<ReleaseUpdate> = None;
+
+        while let Ok(msg) = self.update_rx.try_recv() {
+            match msg {
+                UpdateAsyncMsg::Checked { manual, res } => match res {
+                    Ok(Some(rel)) => {
+                        if self.config.auto_update && rel.can_self_install {
+                            auto_download = Some(rel);
+                        } else {
+                            self.update_state = UpdateState::Available(rel);
+                        }
+                    }
+                    Ok(None) => {
+                        self.update_state = UpdateState::UpToDate;
+                        if manual {
+                            let msg = format!(
+                                "{} (v{})",
+                                self.t().update_up_to_date,
+                                updater::CURRENT_VERSION
+                            );
+                            self.set_info(msg);
+                        }
+                    }
+                    Err(err) => {
+                        if manual {
+                            self.update_state = UpdateState::Error(err.clone());
+                            self.set_error(err);
+                        } else {
+                            self.update_state = UpdateState::Idle;
+                        }
+                    }
+                },
+                UpdateAsyncMsg::Progress { version, progress } => {
+                    self.update_state = UpdateState::Downloading { version, progress };
+                }
+                UpdateAsyncMsg::Installed { version, res } => match res {
+                    Ok(launch_path) => {
+                        self.update_state = UpdateState::ReadyToRestart {
+                            version: version.clone(),
+                            launch_path,
+                        };
+                        self.set_info(format!("v{version} installed — click Restart to apply."));
+                    }
+                    Err(err) => {
+                        self.update_state = UpdateState::Error(err.clone());
+                        self.set_error(err);
+                    }
+                },
+            }
+        }
+
+        if let Some(rel) = auto_download {
+            self.start_update_download(rel, ctx.clone());
+        }
+    }
 }
 
 impl eframe::App for GitKrakenApp {
@@ -896,7 +1363,20 @@ impl eframe::App for GitKrakenApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
         }
 
-        self.handle_native_menu_events();
+        if !self.did_startup_update_check {
+            self.did_startup_update_check = true;
+            if self.config.auto_update {
+                self.check_for_updates(ctx.clone(), false);
+            }
+        }
+
+        self.handle_native_menu_events(ctx);
+        self.drain_pr_events(ctx);
+        self.drain_update_events(ctx);
+
+        if self.settings_open {
+            self.check_gh_cli_once(ctx.clone());
+        }
 
         // Non-blocking O(1) receive of one-shot remote check result
         if let Some(rx) = &self.remote_check_rx {
@@ -964,6 +1444,9 @@ impl eframe::App for GitKrakenApp {
             if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::R)) {
                 self.refresh();
                 self.spawn_remote_check(Some(ctx.clone()));
+                if self.view_mode == ViewMode::PullRequests {
+                    self.fetch_pr_list(Some(ctx.clone()));
+                }
                 let msg = self.t().msg_refreshed;
                 self.set_info(msg);
             }
@@ -977,7 +1460,20 @@ impl eframe::App for GitKrakenApp {
                 self.focus_search = true;
             }
             if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::E)) {
-                self.set_agent_mode(!self.config.agent_mode);
+                let next = if self.view_mode == ViewMode::Agent {
+                    ViewMode::Graph
+                } else {
+                    ViewMode::Agent
+                };
+                self.set_view_mode(next, Some(ctx.clone()));
+            }
+            if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::P)) {
+                let next = if self.view_mode == ViewMode::PullRequests {
+                    ViewMode::Graph
+                } else {
+                    ViewMode::PullRequests
+                };
+                self.set_view_mode(next, Some(ctx.clone()));
             }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -1082,12 +1578,22 @@ impl eframe::App for GitKrakenApp {
             return;
         }
 
-        if self.config.agent_mode {
-            ui::agent_view::show(ctx, self);
-        } else {
-            ui::sidebar::show(ctx, self);
-            ui::inspector::show(ctx, self);
-            ui::graph_view::show(ctx, self);
+        match self.view_mode {
+            ViewMode::Graph => {
+                ui::sidebar::show(ctx, self);
+                ui::inspector::show(ctx, self);
+                ui::graph_view::show(ctx, self);
+            }
+            ViewMode::Agent => {
+                ui::agent_view::show(ctx, self);
+            }
+            ViewMode::PullRequests => {
+                if !self.pr_list_loaded_once && !self.pr_loading_list && self.remote_spec.is_some()
+                {
+                    self.fetch_pr_list(Some(ctx.clone()));
+                }
+                ui::pr_view::show(ctx, self);
+            }
         }
         ui::toolbar::show_modals(ctx, self);
     }

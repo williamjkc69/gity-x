@@ -2,10 +2,11 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Margin, RichText, Rounding, Stroke};
 
-use crate::app::{app_logo_image, GitKrakenApp};
+use crate::app::{app_logo_image, GitKrakenApp, ViewMode};
 use crate::config::{CommitOrder, GraphStyle};
 use crate::i18n::{humanize_git_error, Language};
 use crate::theme;
+use crate::updater::{self, UpdateState};
 
 pub fn show_tabs(ctx: &egui::Context, app: &mut GitKrakenApp) {
     let left_pad = if cfg!(target_os = "macos") { 78.0 } else { 10.0 };
@@ -249,6 +250,72 @@ fn draw_sidebar_toggle_btn(
     resp
 }
 
+fn draw_update_pill(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut GitKrakenApp) {
+    let t = app.t();
+    match app.update_state.clone() {
+        UpdateState::Downloading { version, progress } => {
+            let pct = (progress * 100.0).round() as u32;
+            egui::Frame::none()
+                .fill(Color32::from_rgb(38, 46, 68))
+                .rounding(Rounding::same(6.0))
+                .stroke(Stroke::new(1.0_f32, theme::ACCENT_CYAN))
+                .inner_margin(Margin::symmetric(8.0, 3.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(format!("↓ {} v{version} ({pct}%)", t.update_downloading))
+                            .size(11.5)
+                            .color(theme::ACCENT_CYAN),
+                    );
+                });
+        }
+        UpdateState::ReadyToRestart {
+            version,
+            launch_path,
+        } => {
+            let btn = egui::Button::new(
+                RichText::new(format!("✓ {} (v{version})", t.update_restart_btn))
+                    .size(11.5)
+                    .strong()
+                    .color(Color32::WHITE),
+            )
+            .fill(Color32::from_rgb(34, 92, 62))
+            .stroke(Stroke::new(1.0_f32, theme::ACCENT_GREEN))
+            .rounding(Rounding::same(6.0))
+            .min_size(egui::vec2(0.0, 26.0));
+            if ui.add(btn).clicked() {
+                if let Err(err) = updater::relaunch_and_exit(&launch_path) {
+                    app.set_error(err);
+                }
+            }
+        }
+        UpdateState::Available(rel) => {
+            let btn = egui::Button::new(
+                RichText::new(format!("↓ {} v{}", t.update_available_btn, rel.version))
+                    .size(11.5)
+                    .strong()
+                    .color(Color32::WHITE),
+            )
+            .fill(Color32::from_rgb(44, 54, 86))
+            .stroke(Stroke::new(1.0_f32, theme::ACCENT_CYAN))
+            .rounding(Rounding::same(6.0))
+            .min_size(egui::vec2(0.0, 26.0));
+            let hover = if rel.can_self_install {
+                format!("Download and install v{} automatically", rel.version)
+            } else {
+                format!("Open release page for v{}", rel.version)
+            };
+            if ui.add(btn).on_hover_text(hover).clicked() {
+                if rel.can_self_install {
+                    app.start_update_download(rel, ctx.clone());
+                } else {
+                    let _ = webbrowser::open(&rel.html_url);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
     let t = app.t();
     let frame = egui::Frame::none()
@@ -479,8 +546,8 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
 
                         ui.separator();
 
-                        // Mode switcher pill: Git Graph vs Agent Mode (aligned 26px height)
-                        let graph_active = !app.config.agent_mode;
+                        // Mode switcher pills: Git Graph | Agent Mode | Pull Requests (aligned 26px height)
+                        let graph_active = app.view_mode == ViewMode::Graph;
                         let graph_btn = egui::Button::new(
                             RichText::new(format!("● {}", t.mode_graph))
                                 .size(12.0)
@@ -507,10 +574,10 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                         .min_size(egui::vec2(0.0, 26.0));
 
                         if ui.add(graph_btn).clicked() {
-                            app.set_agent_mode(false);
+                            app.set_view_mode(ViewMode::Graph, Some(ctx.clone()));
                         }
 
-                        let agent_active = app.config.agent_mode;
+                        let agent_active = app.view_mode == ViewMode::Agent;
                         let agent_text = if !app.status_files.is_empty() {
                             format!("◆ {} ({})", t.mode_agent, app.status_files.len())
                         } else {
@@ -540,7 +607,40 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                         .min_size(egui::vec2(0.0, 26.0));
 
                         if ui.add(agent_btn).on_hover_text("Cmd+E").clicked() {
-                            app.set_agent_mode(true);
+                            app.set_view_mode(ViewMode::Agent, Some(ctx.clone()));
+                        }
+
+                        let pr_active = app.view_mode == ViewMode::PullRequests;
+                        let pr_text = if !app.pr_list.is_empty() {
+                            format!("→ {} ({})", t.mode_prs, app.pr_list.len())
+                        } else {
+                            format!("→ {}", t.mode_prs)
+                        };
+                        let pr_btn = egui::Button::new(
+                            RichText::new(pr_text).size(12.0).color(if pr_active {
+                                Color32::WHITE
+                            } else {
+                                theme::TEXT_SECONDARY
+                            }),
+                        )
+                        .fill(if pr_active {
+                            theme::BG_ROW_SELECTED
+                        } else {
+                            theme::BG_PRIMARY
+                        })
+                        .stroke(Stroke::new(
+                            1.0_f32,
+                            if pr_active {
+                                theme::ACCENT_CYAN
+                            } else {
+                                theme::BORDER_SUBTLE
+                            },
+                        ))
+                        .rounding(Rounding::same(7.0))
+                        .min_size(egui::vec2(0.0, 26.0));
+
+                        if ui.add(pr_btn).on_hover_text("Cmd+P").clicked() {
+                            app.set_view_mode(ViewMode::PullRequests, Some(ctx.clone()));
                         }
 
                         ui.separator();
@@ -688,7 +788,7 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                         }
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if !app.config.agent_mode
+                            if app.view_mode == ViewMode::Graph
                                 && draw_sidebar_toggle_btn(
                                     ui,
                                     false,
@@ -719,8 +819,12 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                             {
                                 app.refresh();
                                 app.spawn_remote_check(Some(ctx.clone()));
+                                if app.view_mode == ViewMode::PullRequests {
+                                    app.fetch_pr_list(Some(ctx.clone()));
+                                }
                                 app.set_info(t.msg_refreshed);
                             }
+                            draw_update_pill(ui, ctx, app);
                         });
                     } else {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -733,6 +837,7 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                             {
                                 app.settings_open = !app.settings_open;
                             }
+                            draw_update_pill(ui, ctx, app);
                         });
                     }
                 },
@@ -1136,7 +1241,7 @@ fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.set_min_width(350.0);
+            ui.set_min_width(400.0);
 
             ui.horizontal(|ui| {
                 ui.label(t.language_label);
@@ -1256,6 +1361,166 @@ fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
                 }
             }
 
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(&mut app.config.auto_update, t.auto_update_label)
+                    .changed()
+                {
+                    need_save = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let checking = matches!(
+                        app.update_state,
+                        UpdateState::Checking | UpdateState::Downloading { .. }
+                    );
+                    if ui
+                        .add_enabled(!checking, egui::Button::new(t.check_updates_btn))
+                        .clicked()
+                    {
+                        app.check_for_updates(ctx.clone(), true);
+                    }
+                });
+            });
+            match &app.update_state {
+                UpdateState::Checking => {
+                    ui.label(
+                        RichText::new(t.update_checking)
+                            .size(11.0)
+                            .color(theme::ACCENT_CYAN),
+                    );
+                }
+                UpdateState::UpToDate => {
+                    ui.label(
+                        RichText::new(format!(
+                            "✓ {} (v{})",
+                            t.update_up_to_date,
+                            updater::CURRENT_VERSION
+                        ))
+                        .size(11.0)
+                        .color(theme::ACCENT_GREEN),
+                    );
+                }
+                UpdateState::Downloading { version, progress } => {
+                    let pct = (progress * 100.0).round() as u32;
+                    ui.label(
+                        RichText::new(format!(
+                            "↓ {} v{version} ({pct}%)",
+                            t.update_downloading
+                        ))
+                        .size(11.0)
+                        .color(theme::ACCENT_CYAN),
+                    );
+                }
+                UpdateState::ReadyToRestart { version, .. } => {
+                    ui.label(
+                        RichText::new(format!("✓ v{version} — {}", t.update_restart_btn))
+                            .size(11.0)
+                            .color(theme::ACCENT_GREEN),
+                    );
+                }
+                UpdateState::Error(err) => {
+                    ui.label(
+                        RichText::new(format!("✕ {err}"))
+                            .size(11.0)
+                            .color(theme::ACCENT_ROSE),
+                    );
+                }
+                _ => {}
+            }
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(t.settings_providers_title)
+                    .size(12.0)
+                    .strong()
+                    .color(theme::ACCENT_CYAN),
+            );
+            ui.add_space(6.0);
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("GitHub Token").size(12.0));
+                if app.config.github_token.trim().is_empty() && app.gh_cli_detected {
+                    ui.label(
+                        RichText::new("✓ gh CLI")
+                            .size(11.0)
+                            .color(theme::ACCENT_GREEN),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut app.config.github_token)
+                                .password(true)
+                                .desired_width(210.0)
+                                .hint_text(if app.gh_cli_detected {
+                                    "Auto (gh auth token)"
+                                } else {
+                                    "ghp_... / github_pat_..."
+                                }),
+                        )
+                        .changed()
+                    {
+                        need_save = true;
+                    }
+                });
+            });
+
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("GitLab Token").size(12.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut app.config.gitlab_token)
+                                .password(true)
+                                .desired_width(210.0)
+                                .hint_text("glpat-..."),
+                        )
+                        .changed()
+                    {
+                        need_save = true;
+                    }
+                });
+            });
+
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Bitbucket User").size(12.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut app.config.bitbucket_user)
+                                .desired_width(210.0)
+                                .hint_text("username (empty = Bearer)"),
+                        )
+                        .changed()
+                    {
+                        need_save = true;
+                    }
+                });
+            });
+
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Bitbucket Token").size(12.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut app.config.bitbucket_token)
+                                .password(true)
+                                .desired_width(210.0)
+                                .hint_text("App password or access token"),
+                        )
+                        .changed()
+                    {
+                        need_save = true;
+                    }
+                });
+            });
+
             ui.add_space(12.0);
             ui.separator();
             ui.horizontal(|ui| {
@@ -1275,6 +1540,9 @@ fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     }
     if close_now {
         app.settings_open = false;
+        if app.view_mode == ViewMode::PullRequests {
+            app.fetch_pr_list(Some(ctx.clone()));
+        }
     }
 }
 
@@ -1291,6 +1559,7 @@ fn show_shortcuts_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
         ("Cmd + 1..9", "Switch to tab 1–9"),
         ("Ctrl + Tab", "Next repository tab"),
         ("Cmd + E", "Switch Git Graph / Agent Mode"),
+        ("Cmd + P", "Switch to Pull Requests"),
         ("Cmd + R", "Refresh repository"),
         ("Cmd + F", "Focus search / filter"),
         ("Cmd + B", "Toggle left sidebar"),
@@ -1404,9 +1673,21 @@ fn show_about_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
                         .color(theme::TEXT_MUTED),
                 );
                 ui.add_space(12.0);
-                if ui.button(t.close).clicked() {
-                    close_now = true;
-                }
+                ui.horizontal(|ui| {
+                    let checking = matches!(
+                        app.update_state,
+                        UpdateState::Checking | UpdateState::Downloading { .. }
+                    );
+                    if ui
+                        .add_enabled(!checking, egui::Button::new(t.check_updates_btn))
+                        .clicked()
+                    {
+                        app.check_for_updates(ctx.clone(), true);
+                    }
+                    if ui.button(t.close).clicked() {
+                        close_now = true;
+                    }
+                });
             });
         });
 

@@ -15,6 +15,7 @@ pub const ID_REFRESH: &str = "file_refresh";
 
 pub const ID_MODE_GRAPH: &str = "view_mode_graph";
 pub const ID_MODE_AGENT: &str = "view_mode_agent";
+pub const ID_MODE_PRS: &str = "view_mode_prs";
 pub const ID_TOGGLE_LEFT: &str = "view_toggle_left";
 pub const ID_TOGGLE_RIGHT: &str = "view_toggle_right";
 pub const ID_FOCUS_SEARCH: &str = "view_focus_search";
@@ -114,6 +115,12 @@ impl NativeMenuBar {
                 "Agent Mode",
                 true,
                 Some(Accelerator::new(Some(cmd), Code::KeyE)),
+            ),
+            &MenuItem::with_id(
+                ID_MODE_PRS,
+                "Pull Requests",
+                true,
+                Some(Accelerator::new(Some(cmd), Code::KeyP)),
             ),
             &PredefinedMenuItem::separator(),
             &MenuItem::with_id(

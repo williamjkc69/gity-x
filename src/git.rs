@@ -271,6 +271,23 @@ impl GitRepo {
         Some((ahead, behind))
     }
 
+    pub fn remote_origin_url(&self) -> Option<String> {
+        if let Ok(url) = self.run_git(&["remote", "get-url", "origin"]) {
+            let trimmed = url.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        let remotes = self.run_git(&["remote"]).ok()?;
+        let first = remotes.lines().next()?.trim();
+        if first.is_empty() {
+            return None;
+        }
+        let url = self.run_git(&["remote", "get-url", first]).ok()?;
+        let trimmed = url.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
+
     /// Lightweight ~60-byte remote check using `git ls-remote` (no objects downloaded).
     /// Returns true if the remote branch tip differs from our local remote-tracking ref.
     pub fn has_remote_updates(&self) -> bool {

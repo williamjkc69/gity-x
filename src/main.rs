@@ -6,14 +6,17 @@ mod git;
 mod graph;
 mod i18n;
 mod native_menu;
+mod providers;
 mod theme;
 mod ui;
+mod updater;
 
 use std::path::PathBuf;
 
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    updater::cleanup_stale_backups();
     let initial_path = std::env::args().nth(1).map(PathBuf::from);
 
     let mut viewport = egui::ViewportBuilder::default()
