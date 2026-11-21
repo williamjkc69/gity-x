@@ -2,10 +2,12 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Margin, RichText, Rounding, Stroke};
 
-use crate::app::{app_logo_image, GitKrakenApp, ViewMode};
+use crate::app::{app_logo_image, GitKrakenApp, ProviderTestState, SettingsTab, ViewMode};
 use crate::config::{CommitOrder, GraphStyle};
 use crate::i18n::{humanize_git_error, Language, MOD_KEY};
+use crate::providers::ProviderKind;
 use crate::theme;
+use crate::ui::help_modal;
 use crate::updater::{self, UpdateState};
 
 pub fn show_tabs(ctx: &egui::Context, app: &mut GitKrakenApp) {
@@ -335,6 +337,7 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                     ui.spacing_mut().item_spacing.x = 6.0;
 
                     if app.repo.is_some()
+                        && app.view_mode != ViewMode::PullRequests
                         && draw_sidebar_toggle_btn(
                             ui,
                             true,
@@ -813,6 +816,18 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                             }
                             if ui
                                 .add(
+                                    egui::Button::new(
+                                        RichText::new("?").strong().color(theme::ACCENT_CYAN),
+                                    )
+                                    .min_size(egui::vec2(26.0, 26.0)),
+                                )
+                                .on_hover_text(t.help_center_title)
+                                .clicked()
+                            {
+                                app.help_open = !app.help_open;
+                            }
+                            if ui
+                                .add(
                                     egui::Button::new("↻")
                                         .min_size(egui::vec2(26.0, 26.0)),
                                 )
@@ -838,6 +853,19 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                                 .clicked()
                             {
                                 app.settings_open = !app.settings_open;
+                            }
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new(format!("? {}", t.help_btn))
+                                            .color(theme::ACCENT_CYAN),
+                                    )
+                                    .min_size(egui::vec2(0.0, 26.0)),
+                                )
+                                .on_hover_text(t.help_center_title)
+                                .clicked()
+                            {
+                                app.help_open = !app.help_open;
                             }
                             draw_update_pill(ui, ctx, app);
                         });
@@ -926,6 +954,7 @@ pub fn show_modals(ctx: &egui::Context, app: &mut GitKrakenApp) {
     show_tag_modal(ctx, app);
     show_stash_modal(ctx, app);
     show_settings_modal(ctx, app);
+    help_modal::show(ctx, app);
     show_shortcuts_modal(ctx, app);
     show_about_modal(ctx, app);
     show_error_modal(ctx, app);
@@ -1229,305 +1258,854 @@ fn show_stash_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     }
 }
 
+fn render_test_status(ui: &mut egui::Ui, state: &ProviderTestState, testing_lbl: &str) {
+    match state {
+        ProviderTestState::Idle => {}
+        ProviderTestState::Testing => {
+            ui.label(
+                RichText::new(testing_lbl)
+                    .size(11.0)
+                    .color(theme::ACCENT_CYAN),
+            );
+        }
+        ProviderTestState::Ok(msg) => {
+            ui.label(
+                RichText::new(format!("✓ {msg}"))
+                    .size(11.0)
+                    .color(theme::ACCENT_GREEN),
+            );
+        }
+        ProviderTestState::Err(err) => {
+            ui.label(
+                RichText::new(format!("× {err}"))
+                    .size(11.0)
+                    .color(theme::ACCENT_ROSE),
+            );
+        }
+    }
+}
+
 fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     if !app.settings_open {
         return;
     }
     let t = app.t();
+    let es = app.config.language == Language::Es;
     let mut need_refresh = false;
     let mut need_save = false;
     let mut close_now = false;
+    let mut open_help = false;
+    let mut test_provider: Option<ProviderKind> = None;
 
     egui::Window::new(t.settings_title)
         .collapsible(false)
-        .resizable(false)
+        .resizable(true)
+        .default_width(580.0)
+        .min_width(480.0)
+        .max_height(640.0)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.set_min_width(400.0);
-
+            // Top segmented tab bar: General & Graph | Git Providers & Tokens
             ui.horizontal(|ui| {
-                ui.label(t.language_label);
+                for (tab, label) in [
+                    (SettingsTab::General, t.settings_tab_general),
+                    (SettingsTab::Providers, t.settings_tab_providers),
+                ] {
+                    let active = app.settings_tab == tab;
+                    let btn = egui::Button::new(
+                        RichText::new(label)
+                            .size(12.5)
+                            .strong()
+                            .color(if active {
+                                Color32::WHITE
+                            } else {
+                                theme::TEXT_SECONDARY
+                            }),
+                    )
+                    .fill(if active {
+                        theme::BG_ROW_SELECTED
+                    } else {
+                        Color32::TRANSPARENT
+                    })
+                    .stroke(Stroke::new(
+                        1.0_f32,
+                        if active {
+                            theme::ACCENT_CYAN
+                        } else {
+                            theme::BORDER_SUBTLE
+                        },
+                    ))
+                    .rounding(Rounding::same(7.0))
+                    .min_size(egui::vec2(0.0, 28.0));
+
+                    if ui.add(btn).clicked() {
+                        app.settings_tab = tab;
+                    }
+                }
+
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .selectable_label(app.config.language == Language::Es, Language::Es.label())
-                        .clicked()
-                    {
-                        app.config.language = Language::Es;
-                        need_save = true;
-                    }
-                    if ui
-                        .selectable_label(app.config.language == Language::En, Language::En.label())
-                        .clicked()
-                    {
-                        app.config.language = Language::En;
-                        need_save = true;
-                    }
-                });
-            });
-
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(t.graph_style_label);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .selectable_label(
-                            app.config.graph_style == GraphStyle::Angular,
-                            t.graph_angular,
+                        .button(
+                            RichText::new(format!("? {}", t.help_btn))
+                                .size(11.5)
+                                .color(theme::ACCENT_CYAN),
                         )
                         .clicked()
                     {
-                        app.config.graph_style = GraphStyle::Angular;
-                        need_save = true;
-                    }
-                    if ui
-                        .selectable_label(
-                            app.config.graph_style == GraphStyle::Rounded,
-                            t.graph_rounded,
-                        )
-                        .clicked()
-                    {
-                        app.config.graph_style = GraphStyle::Rounded;
-                        need_save = true;
+                        open_help = true;
                     }
                 });
             });
 
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(t.commit_order_label);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    for (ord, lbl) in [
-                        (CommitOrder::AuthorDate, t.order_author),
-                        (CommitOrder::Date, t.order_date),
-                        (CommitOrder::Topo, t.order_topo),
-                    ] {
-                        if ui
-                            .selectable_label(app.config.commit_order == ord, lbl)
-                            .clicked()
-                        {
-                            app.config.commit_order = ord;
-                            need_save = true;
-                            need_refresh = true;
-                        }
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            egui::ScrollArea::vertical()
+                .id_salt("settings_modal_body_scroll")
+                .auto_shrink([false, true])
+                .max_height(480.0)
+                .show(ui, |ui| match app.settings_tab {
+                    SettingsTab::General => {
+                        // Card 1: Appearance & Graph
+                        egui::Frame::none()
+                            .fill(theme::BG_SURFACE)
+                            .rounding(Rounding::same(9.0))
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                            .inner_margin(Margin::same(12.0))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Apariencia y Grafo Git"
+                                    } else {
+                                        "Appearance & Git Graph"
+                                    })
+                                    .size(12.5)
+                                    .strong()
+                                    .color(theme::ACCENT_CYAN),
+                                );
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Personaliza idioma, estilo visual de ramas y cuántos commits cargar en memoria."
+                                    } else {
+                                        "Customize language, commit branch line style, and how many commits are loaded."
+                                    })
+                                    .size(11.0)
+                                    .color(theme::TEXT_MUTED),
+                                );
+                                ui.add_space(8.0);
+
+                                ui.horizontal(|ui| {
+                                    ui.label(t.language_label);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .selectable_label(
+                                                    app.config.language == Language::Es,
+                                                    Language::Es.label(),
+                                                )
+                                                .clicked()
+                                            {
+                                                app.config.language = Language::Es;
+                                                need_save = true;
+                                            }
+                                            if ui
+                                                .selectable_label(
+                                                    app.config.language == Language::En,
+                                                    Language::En.label(),
+                                                )
+                                                .clicked()
+                                            {
+                                                app.config.language = Language::En;
+                                                need_save = true;
+                                            }
+                                        },
+                                    );
+                                });
+
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(t.graph_style_label);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .selectable_label(
+                                                    app.config.graph_style == GraphStyle::Angular,
+                                                    t.graph_angular,
+                                                )
+                                                .clicked()
+                                            {
+                                                app.config.graph_style = GraphStyle::Angular;
+                                                need_save = true;
+                                            }
+                                            if ui
+                                                .selectable_label(
+                                                    app.config.graph_style == GraphStyle::Rounded,
+                                                    t.graph_rounded,
+                                                )
+                                                .clicked()
+                                            {
+                                                app.config.graph_style = GraphStyle::Rounded;
+                                                need_save = true;
+                                            }
+                                        },
+                                    );
+                                });
+
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(t.commit_order_label);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            for (ord, lbl) in [
+                                                (CommitOrder::AuthorDate, t.order_author),
+                                                (CommitOrder::Date, t.order_date),
+                                                (CommitOrder::Topo, t.order_topo),
+                                            ] {
+                                                if ui
+                                                    .selectable_label(
+                                                        app.config.commit_order == ord,
+                                                        lbl,
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    app.config.commit_order = ord;
+                                                    need_save = true;
+                                                    need_refresh = true;
+                                                }
+                                            }
+                                        },
+                                    );
+                                });
+
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(t.commit_limit_label);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            for &limit in &[2000_usize, 1000, 500, 200] {
+                                                if ui
+                                                    .selectable_label(
+                                                        app.config.commit_limit == limit,
+                                                        limit.to_string(),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    app.config.commit_limit = limit;
+                                                    need_save = true;
+                                                    need_refresh = true;
+                                                }
+                                            }
+                                        },
+                                    );
+                                });
+
+                                ui.add_space(8.0);
+                                if ui
+                                    .checkbox(
+                                        &mut app.config.show_remotes_in_graph,
+                                        t.show_remotes_label,
+                                    )
+                                    .changed()
+                                {
+                                    need_save = true;
+                                    need_refresh = true;
+                                }
+                                ui.add_space(4.0);
+                                if ui
+                                    .checkbox(&mut app.config.compact_rows, t.compact_rows_label)
+                                    .changed()
+                                {
+                                    need_save = true;
+                                }
+                            });
+
+                        ui.add_space(10.0);
+
+                        // Card 2: Sync & Auto-Updates
+                        egui::Frame::none()
+                            .fill(theme::BG_SURFACE)
+                            .rounding(Rounding::same(9.0))
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                            .inner_margin(Margin::same(12.0))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Sincronización y Actualizaciones"
+                                    } else {
+                                        "Sync & Automatic Updates"
+                                    })
+                                    .size(12.5)
+                                    .strong()
+                                    .color(theme::ACCENT_CYAN),
+                                );
+                                ui.add_space(6.0);
+
+                                if ui
+                                    .checkbox(
+                                        &mut app.config.auto_check_remote,
+                                        t.auto_check_remote_label,
+                                    )
+                                    .changed()
+                                {
+                                    need_save = true;
+                                    if app.config.auto_check_remote {
+                                        app.spawn_remote_check(Some(ctx.clone()));
+                                    } else {
+                                        app.remote_updates_available = false;
+                                    }
+                                }
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Desactivado por defecto para evitar avisos del Llavero (Keychain) en repos HTTPS."
+                                    } else {
+                                        "Off by default to prevent macOS Keychain password prompts on HTTPS remotes."
+                                    })
+                                    .size(11.0)
+                                    .color(theme::TEXT_MUTED),
+                                );
+
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .checkbox(&mut app.config.auto_update, t.auto_update_label)
+                                        .changed()
+                                    {
+                                        need_save = true;
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            let checking = matches!(
+                                                app.update_state,
+                                                UpdateState::Checking
+                                                    | UpdateState::Downloading { .. }
+                                            );
+                                            if ui
+                                                .add_enabled(
+                                                    !checking,
+                                                    egui::Button::new(t.check_updates_btn),
+                                                )
+                                                .clicked()
+                                            {
+                                                app.check_for_updates(ctx.clone(), true);
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Verifica GitHub Releases al abrir, valida SHA-256 y actualiza la app en el lugar."
+                                    } else {
+                                        "Checks GitHub Releases on startup, verifies SHA-256 checksums, and updates in place."
+                                    })
+                                    .size(11.0)
+                                    .color(theme::TEXT_MUTED),
+                                );
+
+                                match &app.update_state {
+                                    UpdateState::Checking => {
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            RichText::new(t.update_checking)
+                                                .size(11.0)
+                                                .color(theme::ACCENT_CYAN),
+                                        );
+                                    }
+                                    UpdateState::UpToDate => {
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "✓ {} (v{})",
+                                                t.update_up_to_date,
+                                                updater::CURRENT_VERSION
+                                            ))
+                                            .size(11.0)
+                                            .color(theme::ACCENT_GREEN),
+                                        );
+                                    }
+                                    UpdateState::Downloading { version, progress } => {
+                                        ui.add_space(4.0);
+                                        let pct = (progress * 100.0).round() as u32;
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "↓ {} v{version} ({pct}%)",
+                                                t.update_downloading
+                                            ))
+                                            .size(11.0)
+                                            .color(theme::ACCENT_CYAN),
+                                        );
+                                    }
+                                    UpdateState::ReadyToRestart { version, .. } => {
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "✓ v{version} — {}",
+                                                t.update_restart_btn
+                                            ))
+                                            .size(11.0)
+                                            .color(theme::ACCENT_GREEN),
+                                        );
+                                    }
+                                    UpdateState::Error(err) => {
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            RichText::new(format!("× {err}"))
+                                                .size(11.0)
+                                                .color(theme::ACCENT_ROSE),
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                            });
+                    }
+
+                    SettingsTab::Providers => {
+                        // Top info bar + Show/Hide toggle
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(if es {
+                                    "Los tokens se guardan localmente (permisos 0600) y se usan solo para listar, aprobar y fusionar Pull Requests."
+                                } else {
+                                    "Tokens are saved locally (0600 permissions) and used only to list, review, and merge Pull Requests."
+                                })
+                                .size(11.5)
+                                .color(theme::TEXT_SECONDARY),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let lbl = if app.show_tokens {
+                                        t.hide_tokens
+                                    } else {
+                                        t.show_tokens
+                                    };
+                                    if ui.small_button(lbl).clicked() {
+                                        app.show_tokens = !app.show_tokens;
+                                    }
+                                },
+                            );
+                        });
+
+                        ui.add_space(8.0);
+
+                        // --- Card 1: GitHub ---
+                        egui::Frame::none()
+                            .fill(theme::BG_SURFACE)
+                            .rounding(Rounding::same(9.0))
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                            .inner_margin(Margin::same(12.0))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new("GitHub")
+                                            .size(13.5)
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    );
+                                    if !app.config.github_token.trim().is_empty() {
+                                        ui.label(
+                                            RichText::new("✓ Token")
+                                                .size(11.0)
+                                                .color(theme::ACCENT_GREEN),
+                                        );
+                                    } else if app.gh_cli_detected {
+                                        ui.label(
+                                            RichText::new("✓ Auto (gh CLI)")
+                                                .size(11.0)
+                                                .color(theme::ACCENT_GREEN),
+                                        );
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            let busy = matches!(
+                                                app.test_gh_state,
+                                                ProviderTestState::Testing
+                                            );
+                                            if ui
+                                                .add_enabled(
+                                                    !busy,
+                                                    egui::Button::new(t.test_token_btn),
+                                                )
+                                                .clicked()
+                                            {
+                                                test_provider = Some(ProviderKind::GitHub);
+                                            }
+                                            if ui
+                                                .small_button(
+                                                    RichText::new(if es {
+                                                        "→ Generar token"
+                                                    } else {
+                                                        "→ Create token"
+                                                    })
+                                                    .color(theme::ACCENT_CYAN),
+                                                )
+                                                .clicked()
+                                            {
+                                                let _ = webbrowser::open(
+                                                    "https://github.com/settings/tokens/new?scopes=repo&description=gity-x",
+                                                );
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Necesario para repos privados y para aprobar, comentar o fusionar PRs. Si usas 'gh auth login', se detecta solo."
+                                    } else {
+                                        "Required for private repos and approving, commenting, or merging PRs. Auto-detected if signed in with 'gh auth login'."
+                                    })
+                                    .size(11.0)
+                                    .color(theme::TEXT_MUTED),
+                                );
+                                ui.add_space(6.0);
+                                let gh_w = (ui.available_width() - 4.0).max(260.0);
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut app.config.github_token)
+                                            .password(!app.show_tokens)
+                                            .desired_width(gh_w)
+                                            .hint_text(if app.gh_cli_detected {
+                                                "Optional — already detected via gh CLI"
+                                            } else {
+                                                "ghp_... or github_pat_..."
+                                            }),
+                                    )
+                                    .changed()
+                                {
+                                    need_save = true;
+                                    app.test_gh_state = ProviderTestState::Idle;
+                                }
+                                render_test_status(ui, &app.test_gh_state, t.testing_token);
+                                ui.add_space(4.0);
+                                egui::CollapsingHeader::new(
+                                    RichText::new(if es {
+                                        "Cómo obtener el token de GitHub (paso a paso)"
+                                    } else {
+                                        "How to obtain a GitHub token (step by step)"
+                                    })
+                                    .size(11.5)
+                                    .color(theme::ACCENT_CYAN),
+                                )
+                                .id_salt("guide_github_token")
+                                .show(ui, |ui| {
+                                    let steps: &[&str] = if es {
+                                        &[
+                                            "Opción 1 (más rápida): en Terminal ejecuta 'gh auth login' y elige HTTPS + navegador. gity x lo detecta automáticamente.",
+                                            "Opción 2 (Classic PAT): pulsa '→ Generar token' arriba (ya marca 'repo'), elige expiración, genera y pega el código 'ghp_...'.",
+                                            "Opción 3 (Fine-grained PAT): GitHub → Settings → Developer settings → Fine-grained tokens → selecciona repos → activa 'Pull requests: Read & write' y 'Contents: Read'.",
+                                            "Si el repo es de una empresa con SAML SSO: en la lista de tokens pulsa 'Configure SSO' → 'Authorize'.",
+                                        ]
+                                    } else {
+                                        &[
+                                            "Option 1 (easiest): run 'gh auth login' in Terminal once. gity x detects your token automatically.",
+                                            "Option 2 (Classic PAT): click '→ Create token' above (pre-selects 'repo'), generate, and paste the 'ghp_...' token.",
+                                            "Option 3 (Fine-grained PAT): GitHub → Settings → Developer settings → Fine-grained tokens → select repos → grant 'Pull requests: Read & write' + 'Contents: Read'.",
+                                            "For SAML SSO organizations: click 'Configure SSO' next to your token on GitHub and authorize the org.",
+                                        ]
+                                    };
+                                    for s in steps {
+                                        ui.label(
+                                            RichText::new(*s)
+                                                .size(11.0)
+                                                .color(theme::TEXT_SECONDARY),
+                                        );
+                                    }
+                                });
+                            });
+
+                        ui.add_space(8.0);
+
+                        // --- Card 2: GitLab ---
+                        egui::Frame::none()
+                            .fill(theme::BG_SURFACE)
+                            .rounding(Rounding::same(9.0))
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                            .inner_margin(Margin::same(12.0))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new("GitLab")
+                                            .size(13.5)
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    );
+                                    if !app.config.gitlab_token.trim().is_empty() {
+                                        ui.label(
+                                            RichText::new("✓ Token")
+                                                .size(11.0)
+                                                .color(theme::ACCENT_GREEN),
+                                        );
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            let busy = matches!(
+                                                app.test_gl_state,
+                                                ProviderTestState::Testing
+                                            );
+                                            if ui
+                                                .add_enabled(
+                                                    !busy,
+                                                    egui::Button::new(t.test_token_btn),
+                                                )
+                                                .clicked()
+                                            {
+                                                test_provider = Some(ProviderKind::GitLab);
+                                            }
+                                            if ui
+                                                .small_button(
+                                                    RichText::new(if es {
+                                                        "→ Generar token"
+                                                    } else {
+                                                        "→ Create token"
+                                                    })
+                                                    .color(theme::ACCENT_CYAN),
+                                                )
+                                                .clicked()
+                                            {
+                                                let _ = webbrowser::open(
+                                                    "https://gitlab.com/-/user_settings/personal_access_tokens",
+                                                );
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Compatible con gitlab.com, grupos anidados y servidores self-hosted 'gitlab.*'."
+                                    } else {
+                                        "Works with gitlab.com, nested subgroups, and self-hosted 'gitlab.*' instances."
+                                    })
+                                    .size(11.0)
+                                    .color(theme::TEXT_MUTED),
+                                );
+                                ui.add_space(6.0);
+                                let gl_w = (ui.available_width() - 4.0).max(260.0);
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut app.config.gitlab_token)
+                                            .password(!app.show_tokens)
+                                            .desired_width(gl_w)
+                                            .hint_text("glpat-..."),
+                                    )
+                                    .changed()
+                                {
+                                    need_save = true;
+                                    app.test_gl_state = ProviderTestState::Idle;
+                                }
+                                render_test_status(ui, &app.test_gl_state, t.testing_token);
+                                ui.add_space(4.0);
+                                egui::CollapsingHeader::new(
+                                    RichText::new(if es {
+                                        "Cómo obtener el token de GitLab (paso a paso)"
+                                    } else {
+                                        "How to obtain a GitLab token (step by step)"
+                                    })
+                                    .size(11.5)
+                                    .color(theme::ACCENT_CYAN),
+                                )
+                                .id_salt("guide_gitlab_token")
+                                .show(ui, |ui| {
+                                    let steps: &[&str] = if es {
+                                        &[
+                                            "1. Pulsa '→ Generar token' (o GitLab → Avatar → Edit profile → Access Tokens).",
+                                            "2. Pulsa 'Add new token', pon nombre 'gity-x' y fecha de expiración.",
+                                            "3. Marca el scope 'api' (necesario para aprobar, comentar, fusionar y cerrar MRs). Usa 'read_api' solo para lectura.",
+                                            "4. Copia el token 'glpat-...' y pégalo arriba, luego pulsa 'Probar'.",
+                                        ]
+                                    } else {
+                                        &[
+                                            "1. Click '→ Create token' (or GitLab → Avatar → Preferences → Access Tokens).",
+                                            "2. Click 'Add new token', name it 'gity-x', and pick an expiration date.",
+                                            "3. Check the 'api' scope (required for approve, comment, merge, close). Use 'read_api' for read-only.",
+                                            "4. Copy the 'glpat-...' token, paste it above, and click 'Test'.",
+                                        ]
+                                    };
+                                    for s in steps {
+                                        ui.label(
+                                            RichText::new(*s)
+                                                .size(11.0)
+                                                .color(theme::TEXT_SECONDARY),
+                                        );
+                                    }
+                                });
+                            });
+
+                        ui.add_space(8.0);
+
+                        // --- Card 3: Bitbucket ---
+                        egui::Frame::none()
+                            .fill(theme::BG_SURFACE)
+                            .rounding(Rounding::same(9.0))
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                            .inner_margin(Margin::same(12.0))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new("Bitbucket Cloud")
+                                            .size(13.5)
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    );
+                                    if !app.config.bitbucket_token.trim().is_empty() {
+                                        ui.label(
+                                            RichText::new("✓ Token")
+                                                .size(11.0)
+                                                .color(theme::ACCENT_GREEN),
+                                        );
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            let busy = matches!(
+                                                app.test_bb_state,
+                                                ProviderTestState::Testing
+                                            );
+                                            if ui
+                                                .add_enabled(
+                                                    !busy,
+                                                    egui::Button::new(t.test_token_btn),
+                                                )
+                                                .clicked()
+                                            {
+                                                test_provider = Some(ProviderKind::Bitbucket);
+                                            }
+                                            if ui
+                                                .small_button(
+                                                    RichText::new(if es {
+                                                        "→ Atlassian API Token"
+                                                    } else {
+                                                        "→ Atlassian API Token"
+                                                    })
+                                                    .color(theme::ACCENT_CYAN),
+                                                )
+                                                .clicked()
+                                            {
+                                                let _ = webbrowser::open(
+                                                    "https://id.atlassian.com/manage-profile/security/api-tokens",
+                                                );
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Soporta Atlassian API Token (con tu email arriba) o Repository/Workspace Access Token (deja User vacío)."
+                                    } else {
+                                        "Supports Atlassian API Token (enter your Atlassian email in User) or Repo/Workspace Access Token (leave User empty)."
+                                    })
+                                    .size(11.0)
+                                    .color(theme::TEXT_MUTED),
+                                );
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.add_sized([82.0, 20.0], egui::Label::new(RichText::new("User / Email").size(11.5)));
+                                    let w = (ui.available_width() - 4.0).max(220.0);
+                                    if ui
+                                        .add(
+                                            egui::TextEdit::singleline(
+                                                &mut app.config.bitbucket_user,
+                                            )
+                                            .desired_width(w)
+                                            .hint_text(if es {
+                                                "Tu email de Atlassian (vacío si usas Access Token)"
+                                            } else {
+                                                "Atlassian account email (empty for Access Token)"
+                                            }),
+                                        )
+                                        .changed()
+                                    {
+                                        need_save = true;
+                                        app.test_bb_state = ProviderTestState::Idle;
+                                    }
+                                });
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    ui.add_sized([82.0, 20.0], egui::Label::new(RichText::new("Token").size(11.5)));
+                                    let w = (ui.available_width() - 4.0).max(220.0);
+                                    if ui
+                                        .add(
+                                            egui::TextEdit::singleline(
+                                                &mut app.config.bitbucket_token,
+                                            )
+                                            .password(!app.show_tokens)
+                                            .desired_width(w)
+                                            .hint_text("ATATT3x... / ATCTT3x... / App Password"),
+                                        )
+                                        .changed()
+                                    {
+                                        need_save = true;
+                                        app.test_bb_state = ProviderTestState::Idle;
+                                    }
+                                });
+                                render_test_status(ui, &app.test_bb_state, t.testing_token);
+                                ui.add_space(4.0);
+                                egui::CollapsingHeader::new(
+                                    RichText::new(if es {
+                                        "Cómo obtener el token de Bitbucket (paso a paso)"
+                                    } else {
+                                        "How to obtain a Bitbucket token (step by step)"
+                                    })
+                                    .size(11.5)
+                                    .color(theme::ACCENT_CYAN),
+                                )
+                                .id_salt("guide_bitbucket_token")
+                                .show(ui, |ui| {
+                                    let steps: &[&str] = if es {
+                                        &[
+                                            "Opción A (Atlassian API Token — recomendado para todos tus repos): pulsa '→ Atlassian API Token' → Create API token → pon tu EMAIL de Atlassian en 'User / Email' y pega el token en 'Token'.",
+                                            "Opción B (Access Token de repositorio/workspace): en Bitbucket abre Repository settings → Access tokens → Create Repository Access Token con 'Repositories: Read' y 'Pull requests: Read & Write'. Deja 'User / Email' VACÍO y pega el token (ATCTT3x...).",
+                                            "Pulsa 'Probar' para verificar la autenticación antes de cerrar.",
+                                        ]
+                                    } else {
+                                        &[
+                                            "Option A (Atlassian API Token — works across all your repos): click '→ Atlassian API Token' → Create API token → enter your Atlassian EMAIL in 'User / Email' and paste the token in 'Token'.",
+                                            "Option B (Repo/Workspace Access Token): in Bitbucket open Repository settings → Access tokens → create token with 'Repositories: Read' + 'Pull requests: Read & Write'. Leave 'User / Email' EMPTY and paste the token (ATCTT3x...).",
+                                            "Click 'Test' to verify authentication immediately.",
+                                        ]
+                                    };
+                                    for s in steps {
+                                        ui.label(
+                                            RichText::new(*s)
+                                                .size(11.0)
+                                                .color(theme::TEXT_SECONDARY),
+                                        );
+                                    }
+                                });
+                            });
                     }
                 });
-            });
-
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(t.commit_limit_label);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    for &limit in &[2000_usize, 1000, 500, 200] {
-                        if ui
-                            .selectable_label(app.config.commit_limit == limit, limit.to_string())
-                            .clicked()
-                        {
-                            app.config.commit_limit = limit;
-                            need_save = true;
-                            need_refresh = true;
-                        }
-                    }
-                });
-            });
-
-            ui.add_space(8.0);
-            if ui
-                .checkbox(&mut app.config.show_remotes_in_graph, t.show_remotes_label)
-                .changed()
-            {
-                need_save = true;
-                need_refresh = true;
-            }
-
-            ui.add_space(4.0);
-            if ui
-                .checkbox(&mut app.config.compact_rows, t.compact_rows_label)
-                .changed()
-            {
-                need_save = true;
-            }
-
-            ui.add_space(4.0);
-            if ui
-                .checkbox(
-                    &mut app.config.auto_check_remote,
-                    t.auto_check_remote_label,
-                )
-                .changed()
-            {
-                need_save = true;
-                if app.config.auto_check_remote {
-                    app.spawn_remote_check(Some(ctx.clone()));
-                } else {
-                    app.remote_updates_available = false;
-                }
-            }
-
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .checkbox(&mut app.config.auto_update, t.auto_update_label)
-                    .changed()
-                {
-                    need_save = true;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let checking = matches!(
-                        app.update_state,
-                        UpdateState::Checking | UpdateState::Downloading { .. }
-                    );
-                    if ui
-                        .add_enabled(!checking, egui::Button::new(t.check_updates_btn))
-                        .clicked()
-                    {
-                        app.check_for_updates(ctx.clone(), true);
-                    }
-                });
-            });
-            match &app.update_state {
-                UpdateState::Checking => {
-                    ui.label(
-                        RichText::new(t.update_checking)
-                            .size(11.0)
-                            .color(theme::ACCENT_CYAN),
-                    );
-                }
-                UpdateState::UpToDate => {
-                    ui.label(
-                        RichText::new(format!(
-                            "✓ {} (v{})",
-                            t.update_up_to_date,
-                            updater::CURRENT_VERSION
-                        ))
-                        .size(11.0)
-                        .color(theme::ACCENT_GREEN),
-                    );
-                }
-                UpdateState::Downloading { version, progress } => {
-                    let pct = (progress * 100.0).round() as u32;
-                    ui.label(
-                        RichText::new(format!(
-                            "↓ {} v{version} ({pct}%)",
-                            t.update_downloading
-                        ))
-                        .size(11.0)
-                        .color(theme::ACCENT_CYAN),
-                    );
-                }
-                UpdateState::ReadyToRestart { version, .. } => {
-                    ui.label(
-                        RichText::new(format!("✓ v{version} — {}", t.update_restart_btn))
-                            .size(11.0)
-                            .color(theme::ACCENT_GREEN),
-                    );
-                }
-                UpdateState::Error(err) => {
-                    ui.label(
-                        RichText::new(format!("✕ {err}"))
-                            .size(11.0)
-                            .color(theme::ACCENT_ROSE),
-                    );
-                }
-                _ => {}
-            }
 
             ui.add_space(10.0);
             ui.separator();
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(t.settings_providers_title)
-                    .size(12.0)
-                    .strong()
-                    .color(theme::ACCENT_CYAN),
-            );
-            ui.add_space(6.0);
-
             ui.horizontal(|ui| {
-                ui.label(RichText::new("GitHub Token").size(12.0));
-                if app.config.github_token.trim().is_empty() && app.gh_cli_detected {
-                    ui.label(
-                        RichText::new("✓ gh CLI")
-                            .size(11.0)
-                            .color(theme::ACCENT_GREEN),
-                    );
-                }
+                let cfg_hint = if cfg!(target_os = "windows") {
+                    "%APPDATA%\\gity-x\\config.txt"
+                } else {
+                    "~/.config/gity-x/config.txt"
+                };
+                ui.label(
+                    RichText::new(cfg_hint)
+                        .monospace()
+                        .size(10.5)
+                        .color(theme::TEXT_MUTED),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(
-                            egui::TextEdit::singleline(&mut app.config.github_token)
-                                .password(true)
-                                .desired_width(210.0)
-                                .hint_text(if app.gh_cli_detected {
-                                    "Auto (gh auth token)"
-                                } else {
-                                    "ghp_... / github_pat_..."
-                                }),
-                        )
-                        .changed()
+                        .add(egui::Button::new(t.close).min_size(egui::vec2(76.0, 26.0)))
+                        .clicked()
                     {
-                        need_save = true;
-                    }
-                });
-            });
-
-            ui.add_space(5.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("GitLab Token").size(12.0));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(
-                            egui::TextEdit::singleline(&mut app.config.gitlab_token)
-                                .password(true)
-                                .desired_width(210.0)
-                                .hint_text("glpat-..."),
-                        )
-                        .changed()
-                    {
-                        need_save = true;
-                    }
-                });
-            });
-
-            ui.add_space(5.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Bitbucket User").size(12.0));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(
-                            egui::TextEdit::singleline(&mut app.config.bitbucket_user)
-                                .desired_width(210.0)
-                                .hint_text("email/user (empty = Bearer)"),
-                        )
-                        .changed()
-                    {
-                        need_save = true;
-                    }
-                });
-            });
-
-            ui.add_space(5.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Bitbucket Token").size(12.0));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(
-                            egui::TextEdit::singleline(&mut app.config.bitbucket_token)
-                                .password(true)
-                                .desired_width(210.0)
-                                .hint_text("App password or access token"),
-                        )
-                        .changed()
-                    {
-                        need_save = true;
-                    }
-                });
-            });
-
-            ui.add_space(12.0);
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(t.close).clicked() {
                         close_now = true;
                     }
                 });
@@ -1539,6 +2117,14 @@ fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     }
     if need_refresh {
         app.refresh();
+    }
+    if let Some(kind) = test_provider {
+        app.config.save();
+        app.test_provider_token(kind, ctx.clone());
+    }
+    if open_help {
+        app.settings_open = false;
+        app.help_open = true;
     }
     if close_now {
         app.settings_open = false;
@@ -1715,6 +2301,10 @@ fn show_error_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     let (summary, hint) = humanize_git_error(&app.error_modal.raw_error, app.config.language);
     let mut close_now = false;
     let mut copy_now = false;
+    let mut open_troubleshoot = false;
+    let mut open_provider_cfg = false;
+    let is_api_error = app.error_modal.raw_error.contains("API error")
+        || app.error_modal.raw_error.contains("HTTP 40");
 
     egui::Window::new(
         RichText::new(format!("✕  {}", t.error_modal_title))
@@ -1798,6 +2388,32 @@ fn show_error_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
                 copy_now = true;
             }
 
+            if ui
+                .add(
+                    egui::Button::new(
+                        RichText::new(format!("? {}", t.troubleshoot_btn))
+                            .color(theme::ACCENT_CYAN),
+                    )
+                    .min_size(egui::vec2(0.0, 28.0)),
+                )
+                .clicked()
+            {
+                open_troubleshoot = true;
+            }
+
+            if is_api_error
+                && ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new(t.pr_configure_token).color(theme::ACCENT_AMBER),
+                        )
+                        .min_size(egui::vec2(0.0, 28.0)),
+                    )
+                    .clicked()
+            {
+                open_provider_cfg = true;
+            }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(egui::Button::new(t.close).min_size(egui::vec2(84.0, 28.0)))
@@ -1812,6 +2428,25 @@ fn show_error_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     if copy_now {
         ctx.copy_text(app.error_modal.raw_error.clone());
         app.error_modal.copied = true;
+    }
+    if open_troubleshoot {
+        let raw_lower = app.error_modal.raw_error.to_lowercase();
+        app.help_search = if raw_lower.contains("bitbucket") {
+            "Bitbucket".to_string()
+        } else if raw_lower.contains("gitlab") {
+            "GitLab".to_string()
+        } else if raw_lower.contains("github") {
+            "GitHub".to_string()
+        } else {
+            String::new()
+        };
+        app.error_modal.open = false;
+        app.help_open = true;
+    }
+    if open_provider_cfg {
+        app.error_modal.open = false;
+        app.settings_tab = SettingsTab::Providers;
+        app.settings_open = true;
     }
     if close_now {
         app.error_modal.open = false;

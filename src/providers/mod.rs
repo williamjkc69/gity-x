@@ -44,14 +44,27 @@ pub struct ProviderAuth {
     pub bitbucket_token: String,
 }
 
+pub fn clean_token(raw: &str) -> String {
+    let mut s = raw.trim().trim_matches('"').trim_matches('\'').trim();
+    for prefix in ["Bearer ", "bearer ", "token ", "Token ", "PRIVATE-TOKEN: ", "PRIVATE-TOKEN "] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest.trim();
+            break;
+        }
+    }
+    s.to_string()
+}
+
 impl ProviderAuth {
     pub fn resolve_github_token(&self) -> Option<(String, &'static str)> {
-        if !self.github_token.trim().is_empty() {
-            return Some((self.github_token.trim().to_string(), "Settings"));
+        let cfg = clean_token(&self.github_token);
+        if !cfg.is_empty() {
+            return Some((cfg, "Settings"));
         }
         if let Ok(tok) = std::env::var("GITHUB_TOKEN") {
-            if !tok.trim().is_empty() {
-                return Some((tok.trim().to_string(), "GITHUB_TOKEN"));
+            let cleaned = clean_token(&tok);
+            if !cleaned.is_empty() {
+                return Some((cleaned, "GITHUB_TOKEN"));
             }
         }
         if let Some(tok) = run_cli_token("gh", &["auth", "token"]) {
@@ -61,12 +74,14 @@ impl ProviderAuth {
     }
 
     pub fn resolve_gitlab_token(&self) -> Option<(String, &'static str)> {
-        if !self.gitlab_token.trim().is_empty() {
-            return Some((self.gitlab_token.trim().to_string(), "Settings"));
+        let cfg = clean_token(&self.gitlab_token);
+        if !cfg.is_empty() {
+            return Some((cfg, "Settings"));
         }
         if let Ok(tok) = std::env::var("GITLAB_TOKEN") {
-            if !tok.trim().is_empty() {
-                return Some((tok.trim().to_string(), "GITLAB_TOKEN"));
+            let cleaned = clean_token(&tok);
+            if !cleaned.is_empty() {
+                return Some((cleaned, "GITLAB_TOKEN"));
             }
         }
         None
@@ -76,15 +91,20 @@ impl ProviderAuth {
         let user = if !self.bitbucket_user.trim().is_empty() {
             self.bitbucket_user.trim().to_string()
         } else {
-            std::env::var("BITBUCKET_USER").unwrap_or_default()
+            std::env::var("BITBUCKET_USER")
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
         };
-        let tok = if !self.bitbucket_token.trim().is_empty() {
-            self.bitbucket_token.trim().to_string()
+        let cfg_tok = clean_token(&self.bitbucket_token);
+        let tok = if !cfg_tok.is_empty() {
+            cfg_tok
         } else {
-            std::env::var("BITBUCKET_TOKEN").unwrap_or_default()
+            std::env::var("BITBUCKET_TOKEN")
+                .map(|s| clean_token(&s))
+                .unwrap_or_default()
         };
         if !tok.is_empty() {
-            let src = if !self.bitbucket_token.trim().is_empty() {
+            let src = if !clean_token(&self.bitbucket_token).is_empty() {
                 "Settings"
             } else {
                 "BITBUCKET_TOKEN"
@@ -92,6 +112,106 @@ impl ProviderAuth {
             return Some((user, tok, src));
         }
         None
+    }
+}
+
+/// Verifies credentials live against the provider's `/user` API endpoint.
+pub fn test_provider_auth(kind: ProviderKind, auth: &ProviderAuth) -> Result<String, String> {
+    use serde_json::Value;
+    use std::time::Duration;
+
+    match kind {
+        ProviderKind::GitHub => {
+            let Some((token, src)) = auth.resolve_github_token() else {
+                return Err("No GitHub token found (paste a PAT or sign in via 'gh auth login').".to_string());
+            };
+            let url = "https://api.github.com/user";
+            let resp = ureq::get(url)
+                .timeout(Duration::from_secs(12))
+                .set("Accept", "application/vnd.github+json")
+                .set("X-GitHub-Api-Version", "2022-11-28")
+                .set("User-Agent", "gity-x")
+                .set("Authorization", &format!("Bearer {token}"))
+                .call()
+                .map_err(|e| format_http_error("GitHub", url, true, e))?;
+            let scopes = resp
+                .header("x-oauth-scopes")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let v: Value = resp
+                .into_json()
+                .map_err(|e| format!("GitHub response parse error: {e}"))?;
+            let login = v
+                .get("login")
+                .and_then(Value::as_str)
+                .unwrap_or("authenticated");
+            if scopes.is_empty() {
+                Ok(format!("@{login} ({src})"))
+            } else {
+                Ok(format!("@{login} ({src} • scopes: {scopes})"))
+            }
+        }
+        ProviderKind::GitLab => {
+            let Some((token, src)) = auth.resolve_gitlab_token() else {
+                return Err("No GitLab token configured.".to_string());
+            };
+            let url = "https://gitlab.com/api/v4/user";
+            let resp = ureq::get(url)
+                .timeout(Duration::from_secs(12))
+                .set("User-Agent", "gity-x")
+                .set("PRIVATE-TOKEN", &token)
+                .call()
+                .map_err(|e| format_http_error("GitLab", url, true, e))?;
+            let v: Value = resp
+                .into_json()
+                .map_err(|e| format!("GitLab response parse error: {e}"))?;
+            let login = v
+                .get("username")
+                .or_else(|| v.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("authenticated");
+            Ok(format!("@{login} ({src})"))
+        }
+        ProviderKind::Bitbucket => {
+            let Some((user, token, src)) = auth.resolve_bitbucket_auth() else {
+                return Err("No Bitbucket credentials configured.".to_string());
+            };
+            let use_bearer = user.is_empty() || token.starts_with("ATCTT3x");
+            let auth_header = if use_bearer {
+                format!("Bearer {token}")
+            } else {
+                basic_auth_header(&user, &token)
+            };
+            let url = "https://api.bitbucket.org/2.0/user";
+            let res = ureq::get(url)
+                .timeout(Duration::from_secs(12))
+                .set("User-Agent", "gity-x")
+                .set("Authorization", &auth_header)
+                .call();
+            match res {
+                Ok(resp) => {
+                    let v: Value = resp.into_json().unwrap_or(Value::Null);
+                    let login = v
+                        .get("username")
+                        .or_else(|| v.get("nickname"))
+                        .or_else(|| v.get("display_name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("authenticated");
+                    Ok(format!(
+                        "@{login} ({src} • {})",
+                        if use_bearer { "Bearer" } else { "Basic" }
+                    ))
+                }
+                Err(ureq::Error::Status(403, _)) if use_bearer => {
+                    // Repo/Workspace Access Tokens often lack account:/user scope even though PR scopes are valid
+                    Ok(format!(
+                        "Access Token accepted ({src} • Bearer — repo/workspace scoped)"
+                    ))
+                }
+                Err(e) => Err(format_http_error("Bitbucket", url, true, e)),
+            }
+        }
     }
 }
 
@@ -341,15 +461,28 @@ pub fn parse_remote_url(raw: &str) -> Option<RemoteSpec> {
     })
 }
 
-pub fn format_http_error(provider: &str, url: &str, err: ureq::Error) -> String {
+pub fn format_http_error(
+    provider: &str,
+    url: &str,
+    authenticated: bool,
+    err: ureq::Error,
+) -> String {
     match err {
         ureq::Error::Status(code, resp) => {
             let body = resp.into_string().unwrap_or_default();
             let friendly = extract_api_error_msg(&body);
+            let hint = match (code, authenticated) {
+                (401, _) => "\nHint: Token is invalid or expired. Verify it in Settings → Git Providers and click Test.",
+                (404, false) => "\nHint: Private repositories return HTTP 404 when unauthenticated. Add your token in Settings → Git Providers.",
+                (404, true) => "\nHint: Token may lack access to this repository (check 'repo' scope / Fine-grained repo selection / SAML SSO authorization).",
+                (403, false) => "\nHint: Unauthenticated rate limit or private resource. Configure a token in Settings → Git Providers.",
+                (403, true) => "\nHint: Token lacks required permissions (GitHub: 'repo' or Pull requests R/W; GitLab: 'api'; Bitbucket: Pull requests Write).",
+                _ => "",
+            };
             if friendly.is_empty() {
-                format!("{provider} API error (HTTP {code})\nURL: {url}")
+                format!("{provider} API error (HTTP {code}){hint}\nURL: {url}")
             } else {
-                format!("{provider} API error (HTTP {code}): {friendly}\nURL: {url}")
+                format!("{provider} API error (HTTP {code}): {friendly}{hint}\nURL: {url}")
             }
         }
         ureq::Error::Transport(t) => {
@@ -364,7 +497,9 @@ fn extract_api_error_msg(body: &str) -> String {
             let mut out = msg.to_string();
             if let Some(errs) = val.get("errors").and_then(|v| v.as_array()) {
                 for e in errs {
-                    if let Some(em) = e.get("message").and_then(|v| v.as_str()) {
+                    if let Some(s) = e.as_str() {
+                        out.push_str(&format!("\n- {s}"));
+                    } else if let Some(em) = e.get("message").and_then(|v| v.as_str()) {
                         out.push_str(&format!("\n- {em}"));
                     }
                 }
@@ -481,6 +616,21 @@ mod tests {
 
         let ssh = parse_remote_url("git@bitbucket.org:myworkspace/my-repo.git").unwrap();
         assert_eq!(ssh, https);
+    }
+
+    #[test]
+    fn extracts_github_string_errors() {
+        let body = r#"{"message":"Unprocessable Entity","errors":["Can not approve your own pull request"]}"#;
+        let msg = extract_api_error_msg(body);
+        assert!(msg.contains("Can not approve your own pull request"));
+    }
+
+    #[test]
+    fn cleans_pasted_tokens() {
+        assert_eq!(clean_token("  ghp_abc123\n"), "ghp_abc123");
+        assert_eq!(clean_token("Bearer ghp_abc123"), "ghp_abc123");
+        assert_eq!(clean_token("PRIVATE-TOKEN: glpat-xyz"), "glpat-xyz");
+        assert_eq!(clean_token("\"ATCTT3xToken\""), "ATCTT3xToken");
     }
 
     #[test]

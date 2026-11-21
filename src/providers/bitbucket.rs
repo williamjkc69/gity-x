@@ -29,7 +29,8 @@ impl BitbucketProvider {
             .timeout(std::time::Duration::from_secs(20))
             .set("User-Agent", "gity-x");
         if let Some((user, token)) = &self.creds {
-            if user.is_empty() {
+            // Bitbucket Repo/Workspace Access Tokens (ATCTT3x...) always require Bearer auth
+            if user.is_empty() || token.starts_with("ATCTT3x") {
                 r = r.set("Authorization", &format!("Bearer {token}"));
             } else {
                 r = r.set("Authorization", &basic_auth_header(user, token));
@@ -42,7 +43,7 @@ impl BitbucketProvider {
         let (url, r) = self.req("GET", path);
         let resp = r
             .call()
-            .map_err(|e| format_http_error("Bitbucket", &url, e))?;
+            .map_err(|e| format_http_error("Bitbucket", &url, self.creds.is_some(), e))?;
         resp.into_json::<Value>()
             .map_err(|e| format!("Bitbucket JSON parse error: {e}"))
     }
@@ -51,7 +52,7 @@ impl BitbucketProvider {
         let (url, r) = self.req("GET", path);
         let resp = r
             .call()
-            .map_err(|e| format_http_error("Bitbucket", &url, e))?;
+            .map_err(|e| format_http_error("Bitbucket", &url, self.creds.is_some(), e))?;
         resp.into_string()
             .map_err(|e| format!("Bitbucket text read error: {e}"))
     }
@@ -60,7 +61,7 @@ impl BitbucketProvider {
         let (url, r) = self.req(method, path);
         let resp = r
             .send_json(payload)
-            .map_err(|e| format_http_error("Bitbucket", &url, e))?;
+            .map_err(|e| format_http_error("Bitbucket", &url, self.creds.is_some(), e))?;
         resp.into_json::<Value>().or_else(|_| Ok(Value::Null))
     }
 

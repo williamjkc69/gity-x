@@ -211,7 +211,6 @@ pub struct Strings {
     pub pr_filter_hint: &'static str,
     pub pr_loading: &'static str,
     pub pr_none_found: &'static str,
-    pub pr_select_prompt: &'static str,
     pub pr_no_provider: &'static str,
     pub pr_configure_token: &'static str,
     pub pr_tab_conversation: &'static str,
@@ -230,10 +229,8 @@ pub struct Strings {
     pub pr_reopen_btn: &'static str,
     pub pr_comment_hint: &'static str,
     pub pr_no_description: &'static str,
-    pub pr_wants_to_merge: &'static str,
     pub pr_approved_badge: &'static str,
     pub pr_changes_requested_badge: &'static str,
-    pub settings_providers_title: &'static str,
     pub auto_update_label: &'static str,
     pub check_updates_btn: &'static str,
     pub update_checking: &'static str,
@@ -241,6 +238,17 @@ pub struct Strings {
     pub update_available_btn: &'static str,
     pub update_downloading: &'static str,
     pub update_restart_btn: &'static str,
+    pub help_center_title: &'static str,
+    pub help_btn: &'static str,
+    pub troubleshoot_btn: &'static str,
+    pub settings_tab_general: &'static str,
+    pub settings_tab_providers: &'static str,
+    pub test_token_btn: &'static str,
+    pub testing_token: &'static str,
+    pub show_tokens: &'static str,
+    pub hide_tokens: &'static str,
+    pub pr_click_to_expand: &'static str,
+    pub pr_token_missing_banner: &'static str,
 }
 
 pub const EN: Strings = Strings {
@@ -403,7 +411,6 @@ pub const EN: Strings = Strings {
     pr_filter_hint: "Filter PRs by title, #number, author...",
     pr_loading: "Loading...",
     pr_none_found: "No pull requests match this filter.",
-    pr_select_prompt: "Select a Pull Request on the left\nto view conversation, commits, and files.",
     pr_no_provider: "No supported Git hosting provider (GitHub, GitLab, Bitbucket) detected in remotes.",
     pr_configure_token: "Configure Token",
     pr_tab_conversation: "Conversation",
@@ -422,10 +429,8 @@ pub const EN: Strings = Strings {
     pr_reopen_btn: "Reopen",
     pr_comment_hint: "Leave a comment or review note...",
     pr_no_description: "No description provided.",
-    pr_wants_to_merge: "wants to merge",
     pr_approved_badge: "✓ Approved",
     pr_changes_requested_badge: "× Changes requested",
-    settings_providers_title: "Git Providers (Pull Requests)",
     auto_update_label: "Auto-download app updates on startup",
     check_updates_btn: "Check for updates",
     update_checking: "Checking updates...",
@@ -433,6 +438,17 @@ pub const EN: Strings = Strings {
     update_available_btn: "Update",
     update_downloading: "Updating",
     update_restart_btn: "Restart to update",
+    help_center_title: "Help & Troubleshooting Center",
+    help_btn: "Help",
+    troubleshoot_btn: "Troubleshoot",
+    settings_tab_general: "General & Graph",
+    settings_tab_providers: "Git Providers & Tokens",
+    test_token_btn: "Test",
+    testing_token: "Testing...",
+    show_tokens: "Show",
+    hide_tokens: "Hide",
+    pr_click_to_expand: "Click any Pull Request to expand details, conversation, commits, and diffs.",
+    pr_token_missing_banner: "No API token detected — private repos return HTTP 404 without authentication.",
 };
 
 pub const ES: Strings = Strings {
@@ -595,7 +611,6 @@ pub const ES: Strings = Strings {
     pr_filter_hint: "Filtrar PRs por título, #número, autor...",
     pr_loading: "Cargando...",
     pr_none_found: "No hay pull requests en este filtro.",
-    pr_select_prompt: "Selecciona un Pull Request a la izquierda\npara ver conversación, commits y archivos.",
     pr_no_provider: "No se detectó un proveedor compatible (GitHub, GitLab, Bitbucket) en los remotos.",
     pr_configure_token: "Configurar Token",
     pr_tab_conversation: "Conversación",
@@ -614,10 +629,8 @@ pub const ES: Strings = Strings {
     pr_reopen_btn: "Reabrir",
     pr_comment_hint: "Escribe un comentario o revisión...",
     pr_no_description: "Sin descripción.",
-    pr_wants_to_merge: "quiere fusionar",
     pr_approved_badge: "✓ Aprobado",
     pr_changes_requested_badge: "× Cambios solicitados",
-    settings_providers_title: "Proveedores Git (Pull Requests)",
     auto_update_label: "Descargar actualizaciones automáticamente al abrir",
     check_updates_btn: "Buscar actualizaciones",
     update_checking: "Buscando actualizaciones...",
@@ -625,6 +638,17 @@ pub const ES: Strings = Strings {
     update_available_btn: "Actualizar",
     update_downloading: "Actualizando",
     update_restart_btn: "Reiniciar para actualizar",
+    help_center_title: "Centro de Ayuda y Solución de Problemas",
+    help_btn: "Ayuda",
+    troubleshoot_btn: "Solucionar",
+    settings_tab_general: "General y Grafo",
+    settings_tab_providers: "Proveedores Git y Tokens",
+    test_token_btn: "Probar",
+    testing_token: "Probando...",
+    show_tokens: "Mostrar",
+    hide_tokens: "Ocultar",
+    pr_click_to_expand: "Haz clic en cualquier Pull Request para expandir detalles, conversación, commits y diffs.",
+    pr_token_missing_banner: "No se detectó token de API — los repos privados devuelven HTTP 404 sin autenticación.",
 };
 
 pub fn tr(lang: Language) -> &'static Strings {
@@ -802,6 +826,87 @@ pub fn humanize_git_error(raw: &str, lang: Language) -> (&'static str, &'static 
             Language::Es => (
                 "La rama no tiene upstream remoto configurado",
                 "Haz click derecho en la rama en el panel izquierdo y usa 'Push rama a origin'.",
+            ),
+        };
+    }
+
+    if lower.contains("http 401") || lower.contains("bad credentials") {
+        return match lang {
+            Language::En => (
+                "API token rejected (HTTP 401 Unauthorized)",
+                "Your token is invalid or expired. Open Settings → Git Providers & Tokens, paste a fresh token, and click Test.",
+            ),
+            Language::Es => (
+                "Token de API rechazado (HTTP 401 No autorizado)",
+                "Tu token es inválido o expiró. Abre Configuración → Proveedores Git y Tokens, pega uno válido y pulsa Probar.",
+            ),
+        };
+    }
+
+    if lower.contains("saml") || lower.contains("sso") {
+        return match lang {
+            Language::En => (
+                "Organization SAML SSO authorization required",
+                "In GitHub Settings → Developer settings → Personal access tokens, click 'Configure SSO' next to your token and authorize the organization.",
+            ),
+            Language::Es => (
+                "Se requiere autorización SAML SSO de la organización",
+                "En GitHub → Developer settings → Personal access tokens, pulsa 'Configure SSO' junto a tu token y autoriza la organización.",
+            ),
+        };
+    }
+
+    if lower.contains("approve your own pull request")
+        || lower.contains("can not approve your own")
+        || lower.contains("cannot approve your own")
+    {
+        return match lang {
+            Language::En => (
+                "Cannot approve your own Pull Request",
+                "GitHub and Bitbucket prevent PR authors from approving their own PR. Another reviewer must approve it, or you can Merge directly if allowed.",
+            ),
+            Language::Es => (
+                "No puedes aprobar tu propio Pull Request",
+                "GitHub y Bitbucket impiden que el autor apruebe su propio PR. Debe aprobarlo otro revisor, o haz Merge directo si tienes permisos.",
+            ),
+        };
+    }
+
+    if lower.contains("http 403") || lower.contains("rate limit") {
+        return match lang {
+            Language::En => (
+                "Permission denied or rate limit exceeded (HTTP 403)",
+                "Check required token scopes (GitHub: 'repo' / Pull requests R&W; GitLab: 'api'; Bitbucket: Pull requests Write) in Settings → Git Providers, or open Troubleshoot.",
+            ),
+            Language::Es => (
+                "Permiso denegado o límite excedido (HTTP 403)",
+                "Verifica los permisos del token (GitHub: 'repo' o Pull requests R/W; GitLab: 'api'; Bitbucket: Pull requests Write) en Configuración o abre Solucionar.",
+            ),
+        };
+    }
+
+    if lower.contains("http 404") && lower.contains("api error") {
+        return match lang {
+            Language::En => (
+                "Repository not found or private without authentication (HTTP 404)",
+                "Private repos return HTTP 404 when no valid token has access. Open Settings → Git Providers & Tokens, configure your token, and click Test.",
+            ),
+            Language::Es => (
+                "Repositorio no encontrado o privado sin autenticación (HTTP 404)",
+                "Los repos privados devuelven HTTP 404 sin un token con acceso. Abre Configuración → Proveedores Git y Tokens, configura tu token y pulsa Probar.",
+            ),
+        };
+    }
+
+    if lower.contains("http 405") || lower.contains("http 409") || lower.contains("not mergeable") {
+        return match lang {
+            Language::En => (
+                "Pull Request cannot be merged right now",
+                "Check for merge conflicts, failing CI checks, or branch protection rules requiring reviews before merging.",
+            ),
+            Language::Es => (
+                "El Pull Request no se puede fusionar en este momento",
+                "Revisa si hay conflictos, checks de CI fallando o reglas de protección de rama que exigen aprobación.",
             ),
         };
     }

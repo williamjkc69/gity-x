@@ -37,7 +37,9 @@ impl GitLabProvider {
 
     fn get_json(&self, path: &str) -> Result<Value, String> {
         let (url, r) = self.req("GET", path);
-        let resp = r.call().map_err(|e| format_http_error("GitLab", &url, e))?;
+        let resp = r
+            .call()
+            .map_err(|e| format_http_error("GitLab", &url, self.token.is_some(), e))?;
         resp.into_json::<Value>()
             .map_err(|e| format!("GitLab JSON parse error: {e}"))
     }
@@ -46,7 +48,7 @@ impl GitLabProvider {
         let (url, r) = self.req(method, path);
         let resp = r
             .send_json(payload)
-            .map_err(|e| format_http_error("GitLab", &url, e))?;
+            .map_err(|e| format_http_error("GitLab", &url, self.token.is_some(), e))?;
         resp.into_json::<Value>().or_else(|_| Ok(Value::Null))
     }
 

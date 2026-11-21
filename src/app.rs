@@ -13,7 +13,8 @@ use crate::graph::CommitGraph;
 use crate::i18n::{tr, Strings};
 use crate::native_menu::{self, NativeMenuBar};
 use crate::providers::{
-    self, MergeStrategy, PrStateFilter, PullRequestDetail, PullRequestSummary, RemoteSpec,
+    self, MergeStrategy, PrStateFilter, ProviderKind, PullRequestDetail, PullRequestSummary,
+    RemoteSpec,
 };
 use crate::theme;
 use crate::ui;
@@ -58,6 +59,21 @@ pub enum PrActionKind {
     Reopen,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    General,
+    Providers,
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum ProviderTestState {
+    #[default]
+    Idle,
+    Testing,
+    Ok(String),
+    Err(String),
+}
+
 enum PrAsyncMsg {
     ListLoaded {
         repo_path: PathBuf,
@@ -77,6 +93,10 @@ enum PrAsyncMsg {
         res: Result<String, String>,
     },
     GhCliStatus(bool),
+    AuthTested {
+        kind: ProviderKind,
+        res: Result<String, String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +251,13 @@ pub struct GitKrakenApp {
     pub stash_modal: StashModal,
     pub error_modal: ErrorModal,
     pub settings_open: bool,
+    pub settings_tab: SettingsTab,
+    pub show_tokens: bool,
+    pub test_gh_state: ProviderTestState,
+    pub test_gl_state: ProviderTestState,
+    pub test_bb_state: ProviderTestState,
+    pub help_open: bool,
+    pub help_search: String,
     pub shortcuts_open: bool,
     pub about_open: bool,
     pub scroll_to_row: Option<usize>,
@@ -322,6 +349,13 @@ impl GitKrakenApp {
             stash_modal: StashModal::default(),
             error_modal: ErrorModal::default(),
             settings_open: false,
+            settings_tab: SettingsTab::General,
+            show_tokens: false,
+            test_gh_state: ProviderTestState::Idle,
+            test_gl_state: ProviderTestState::Idle,
+            test_bb_state: ProviderTestState::Idle,
+            help_open: false,
+            help_search: String::new(),
             shortcuts_open: false,
             about_open: false,
             scroll_to_row: None,
@@ -942,6 +976,34 @@ impl GitKrakenApp {
         });
     }
 
+    pub fn toggle_pr_expand(&mut self, number: u64, ctx: egui::Context) {
+        if self.pr_selected == Some(number) {
+            self.pr_selected = None;
+            self.pr_detail = None;
+            self.pr_loading_detail = false;
+            self.pr_detail_req_id = self.pr_detail_req_id.wrapping_add(1);
+        } else {
+            self.pr_detail = None;
+            self.pr_detail_tab = PrDetailTab::Conversation;
+            self.fetch_pr_detail(number, Some(ctx));
+        }
+    }
+
+    pub fn test_provider_token(&mut self, kind: ProviderKind, ctx: egui::Context) {
+        match kind {
+            ProviderKind::GitHub => self.test_gh_state = ProviderTestState::Testing,
+            ProviderKind::GitLab => self.test_gl_state = ProviderTestState::Testing,
+            ProviderKind::Bitbucket => self.test_bb_state = ProviderTestState::Testing,
+        }
+        let auth = self.config.provider_auth();
+        let tx = self.pr_tx.clone();
+        std::thread::spawn(move || {
+            let res = providers::test_provider_auth(kind, &auth);
+            let _ = tx.send(PrAsyncMsg::AuthTested { kind, res });
+            ctx.request_repaint();
+        });
+    }
+
     pub fn fetch_pr_detail(&mut self, number: u64, ctx: Option<egui::Context>) {
         let Some(repo) = self.repo.as_ref() else {
             return;
@@ -1094,6 +1156,9 @@ impl GitKrakenApp {
                 native_menu::ID_SHORTCUTS => {
                     self.shortcuts_open = true;
                 }
+                native_menu::ID_HELP_CENTER => {
+                    self.help_open = true;
+                }
                 native_menu::ID_OPEN_REPO | native_menu::ID_NEW_TAB => {
                     self.open_repo_dialog();
                 }
@@ -1161,7 +1226,6 @@ impl GitKrakenApp {
     }
 
     fn drain_pr_events(&mut self, ctx: &egui::Context) {
-        let mut auto_fetch_detail: Option<u64> = None;
         let mut reload_after_action: Option<(u64, bool)> = None;
 
         while let Ok(msg) = self.pr_rx.try_recv() {
@@ -1185,9 +1249,6 @@ impl GitKrakenApp {
                             if !still_exists {
                                 self.pr_selected = None;
                                 self.pr_detail = None;
-                                if let Some(first) = list.first() {
-                                    auto_fetch_detail = Some(first.number);
-                                }
                             }
                             self.pr_list = list;
                         }
@@ -1242,6 +1303,17 @@ impl GitKrakenApp {
                 PrAsyncMsg::GhCliStatus(detected) => {
                     self.gh_cli_detected = detected;
                 }
+                PrAsyncMsg::AuthTested { kind, res } => {
+                    let st = match res {
+                        Ok(msg) => ProviderTestState::Ok(msg),
+                        Err(err) => ProviderTestState::Err(err),
+                    };
+                    match kind {
+                        ProviderKind::GitHub => self.test_gh_state = st,
+                        ProviderKind::GitLab => self.test_gl_state = st,
+                        ProviderKind::Bitbucket => self.test_bb_state = st,
+                    }
+                }
             }
         }
 
@@ -1251,8 +1323,6 @@ impl GitKrakenApp {
             if merged {
                 self.refresh();
             }
-        } else if let Some(num) = auto_fetch_detail {
-            self.fetch_pr_detail(num, Some(ctx.clone()));
         }
     }
 
@@ -1374,7 +1444,7 @@ impl eframe::App for GitKrakenApp {
         self.drain_pr_events(ctx);
         self.drain_update_events(ctx);
 
-        if self.settings_open {
+        if self.settings_open || self.view_mode == ViewMode::PullRequests {
             self.check_gh_cli_once(ctx.clone());
         }
 
@@ -1483,6 +1553,7 @@ impl eframe::App for GitKrakenApp {
             self.stash_modal.open = false;
             self.error_modal.open = false;
             self.settings_open = false;
+            self.help_open = false;
             self.shortcuts_open = false;
             self.about_open = false;
         }

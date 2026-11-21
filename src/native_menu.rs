@@ -7,6 +7,7 @@ use muda::{
 pub const ID_ABOUT: &str = "app_about";
 pub const ID_SETTINGS: &str = "app_settings";
 pub const ID_SHORTCUTS: &str = "app_shortcuts";
+pub const ID_HELP_CENTER: &str = "app_help_center";
 
 pub const ID_OPEN_REPO: &str = "file_open_repo";
 pub const ID_NEW_TAB: &str = "file_new_tab";
@@ -96,17 +97,8 @@ impl NativeMenuBar {
             ),
         ]);
 
-        let edit_menu = Submenu::new("Edit", true);
-        let _ = edit_menu.append_items(&[
-            &PredefinedMenuItem::undo(None),
-            &PredefinedMenuItem::redo(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::cut(None),
-            &PredefinedMenuItem::copy(None),
-            &PredefinedMenuItem::paste(None),
-            &PredefinedMenuItem::select_all(None),
-        ]);
-
+        // Note: Do NOT register PredefinedMenuItem::cut/copy/paste/select_all/undo/redo
+        // in macOS NSMenu — AppKit intercepts Cmd+V/C/X/A/Z before winit/egui receives them.
         let view_menu = Submenu::new("View", true);
         let _ = view_menu.append_items(&[
             &MenuItem::with_id(ID_MODE_GRAPH, "Git Graph Mode", true, None),
@@ -157,6 +149,7 @@ impl NativeMenuBar {
 
         let help_menu = Submenu::new("Help", true);
         let _ = help_menu.append_items(&[
+            &MenuItem::with_id(ID_HELP_CENTER, "Help & Troubleshooting", true, None),
             &MenuItem::with_id(ID_SHORTCUTS, "Keyboard Shortcuts", true, None),
             &MenuItem::with_id(ID_ABOUT, "About gity x", true, None),
         ]);
@@ -164,7 +157,6 @@ impl NativeMenuBar {
         let _ = menu.append_items(&[
             &app_menu,
             &file_menu,
-            &edit_menu,
             &view_menu,
             &git_menu,
             &help_menu,
