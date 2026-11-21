@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Margin, RichText, Rounding, Stroke};
 
+use crate::ai_review::AiProviderKind;
 use crate::app::{app_logo_image, GitKrakenApp, ProviderTestState, SettingsTab, ViewMode};
 use crate::config::{CommitOrder, GraphStyle};
 use crate::i18n::{humanize_git_error, Language, MOD_KEY};
@@ -1296,6 +1297,7 @@ fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     let mut close_now = false;
     let mut open_help = false;
     let mut test_provider: Option<ProviderKind> = None;
+    let mut test_ai_now = false;
 
     egui::Window::new(t.settings_title)
         .collapsible(false)
@@ -1310,6 +1312,7 @@ fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
                 for (tab, label) in [
                     (SettingsTab::General, t.settings_tab_general),
                     (SettingsTab::Providers, t.settings_tab_providers),
+                    (SettingsTab::Ai, t.settings_tab_ai),
                 ] {
                     let active = app.settings_tab == tab;
                     let btn = egui::Button::new(
@@ -2085,6 +2088,468 @@ fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
                                 });
                             });
                     }
+
+                    SettingsTab::Ai => {
+                        // Top Opt-In Master Toggle Card
+                        egui::Frame::none()
+                            .fill(if app.config.ai_enabled {
+                                Color32::from_rgb(36, 32, 54)
+                            } else {
+                                theme::BG_SURFACE
+                            })
+                            .rounding(Rounding::same(9.0))
+                            .stroke(Stroke::new(
+                                1.0_f32,
+                                if app.config.ai_enabled {
+                                    theme::ACCENT_PURPLE
+                                } else {
+                                    theme::BORDER_ELEVATED
+                                },
+                            ))
+                            .inner_margin(Margin::same(12.0))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    let toggle_lbl = if es {
+                                        "Habilitar revisiones de Pull Requests con IA"
+                                    } else {
+                                        "Enable AI Pull Request Reviews"
+                                    };
+                                    if ui
+                                        .checkbox(
+                                            &mut app.config.ai_enabled,
+                                            RichText::new(toggle_lbl)
+                                                .size(13.0)
+                                                .strong()
+                                                .color(Color32::WHITE),
+                                        )
+                                        .changed()
+                                    {
+                                        need_save = true;
+                                        if !app.config.ai_enabled {
+                                            app.test_ai_state = ProviderTestState::Idle;
+                                        }
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if app.config.ai_enabled {
+                                                let lbl = if app.show_tokens {
+                                                    t.hide_tokens
+                                                } else {
+                                                    t.show_tokens
+                                                };
+                                                if ui.small_button(lbl).clicked() {
+                                                    app.show_tokens = !app.show_tokens;
+                                                }
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.add_space(3.0);
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Activa esta opción para auditar Pull Requests con IA (seguridad, rendimiento, bugs, linting y buenas prácticas) y publicar reportes como comentarios. Al activarla, configura abajo uno de los proveedores de IA."
+                                    } else {
+                                        "Turn this on to audit Pull Requests with AI (security, performance, bugs, linting, and best practices) and post reports as PR comments. Once enabled, configure an AI provider below."
+                                    })
+                                    .size(11.0)
+                                    .color(theme::TEXT_SECONDARY),
+                                );
+                            });
+
+                        if app.config.ai_enabled && !app.config.ai_config().has_credentials() {
+                            ui.add_space(6.0);
+                            egui::Frame::none()
+                                .fill(Color32::from_rgb(56, 44, 24))
+                                .rounding(Rounding::same(7.0))
+                                .stroke(Stroke::new(
+                                    1.0_f32,
+                                    theme::ACCENT_AMBER.linear_multiply(0.75),
+                                ))
+                                .inner_margin(Margin::symmetric(10.0, 6.0))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.label(
+                                        RichText::new(if es {
+                                            "! Selecciona un proveedor de IA y pega tu API Key (o elige Custom para un servidor local) y pulsa Probar."
+                                        } else {
+                                            "! Select an AI provider and enter your API Key (or pick Custom for a local server), then click Test."
+                                        })
+                                        .size(11.5)
+                                        .color(theme::ACCENT_AMBER),
+                                    );
+                                });
+                        }
+
+                        ui.add_space(8.0);
+
+                        // Everything below stays cleanly disabled until user enables AI Reviews above
+                        ui.add_enabled_ui(app.config.ai_enabled, |ui| {
+                        // Provider selector + Credentials card
+                        egui::Frame::none()
+                            .fill(theme::BG_SURFACE)
+                            .rounding(Rounding::same(9.0))
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                            .inner_margin(Margin::same(12.0))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(if es {
+                                            "Proveedor de IA"
+                                        } else {
+                                            "AI Provider"
+                                        })
+                                        .size(13.0)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            let busy = matches!(
+                                                app.test_ai_state,
+                                                ProviderTestState::Testing
+                                            );
+                                            if ui
+                                                .add_enabled(
+                                                    !busy,
+                                                    egui::Button::new(t.test_token_btn),
+                                                )
+                                                .clicked()
+                                            {
+                                                test_ai_now = true;
+                                            }
+                                            if let Some(url) = app.config.ai_provider.api_key_url()
+                                            {
+                                                if ui
+                                                    .small_button(
+                                                        RichText::new(if es {
+                                                            "→ Obtener API Key"
+                                                        } else {
+                                                            "→ Get API Key"
+                                                        })
+                                                        .color(theme::ACCENT_CYAN),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    let _ = webbrowser::open(url);
+                                                }
+                                            }
+                                        },
+                                    );
+                                });
+
+                                ui.add_space(6.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    for prov in [
+                                        AiProviderKind::OpenAi,
+                                        AiProviderKind::Anthropic,
+                                        AiProviderKind::OpenRouter,
+                                        AiProviderKind::Gemini,
+                                        AiProviderKind::Custom,
+                                    ] {
+                                        let active = app.config.ai_provider == prov;
+                                        if ui
+                                            .selectable_label(
+                                                active,
+                                                RichText::new(prov.label()).size(12.0),
+                                            )
+                                            .clicked()
+                                            && !active
+                                        {
+                                            app.config.ai_provider = prov;
+                                            app.config.ai_model =
+                                                prov.default_model().to_string();
+                                            if prov == AiProviderKind::Custom
+                                                && app.config.ai_base_url.trim().is_empty()
+                                            {
+                                                app.config.ai_base_url =
+                                                    prov.default_endpoint().to_string();
+                                            } else if prov != AiProviderKind::Custom {
+                                                app.config.ai_base_url.clear();
+                                            }
+                                            app.test_ai_state = ProviderTestState::Idle;
+                                            need_save = true;
+                                        }
+                                    }
+                                });
+
+                                ui.add_space(8.0);
+                                // API Key input
+                                ui.horizontal(|ui| {
+                                    ui.add_sized(
+                                        [82.0, 20.0],
+                                        egui::Label::new(RichText::new("API Key").size(11.5)),
+                                    );
+                                    let w = (ui.available_width() - 4.0).max(220.0);
+                                    let hint = match app.config.ai_provider {
+                                        AiProviderKind::OpenAi => "sk-... (or env OPENAI_API_KEY)",
+                                        AiProviderKind::Anthropic => {
+                                            "sk-ant-... (or env ANTHROPIC_API_KEY)"
+                                        }
+                                        AiProviderKind::OpenRouter => {
+                                            "sk-or-... (or env OPENROUTER_API_KEY)"
+                                        }
+                                        AiProviderKind::Gemini => {
+                                            "AIza... (or env GEMINI_API_KEY)"
+                                        }
+                                        AiProviderKind::Custom => {
+                                            "Optional for local Ollama / LM Studio"
+                                        }
+                                    };
+                                    if ui
+                                        .add(
+                                            egui::TextEdit::singleline(&mut app.config.ai_api_key)
+                                                .password(!app.show_tokens)
+                                                .desired_width(w)
+                                                .hint_text(hint),
+                                        )
+                                        .changed()
+                                    {
+                                        need_save = true;
+                                        app.test_ai_state = ProviderTestState::Idle;
+                                    }
+                                });
+
+                                ui.add_space(5.0);
+                                // Model input + presets
+                                ui.horizontal(|ui| {
+                                    ui.add_sized(
+                                        [82.0, 20.0],
+                                        egui::Label::new(RichText::new("Model").size(11.5)),
+                                    );
+                                    let w = (ui.available_width() - 4.0).max(220.0);
+                                    if ui
+                                        .add(
+                                            egui::TextEdit::singleline(&mut app.config.ai_model)
+                                                .desired_width(w)
+                                                .hint_text(app.config.ai_provider.default_model()),
+                                        )
+                                        .changed()
+                                    {
+                                        need_save = true;
+                                        app.test_ai_state = ProviderTestState::Idle;
+                                    }
+                                });
+
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    ui.add_space(86.0);
+                                    ui.label(
+                                        RichText::new(if es {
+                                            "Recomendados para code review (clic para elegir):"
+                                        } else {
+                                            "Community picks for code review (click to select):"
+                                        })
+                                        .size(10.5)
+                                        .color(theme::TEXT_MUTED),
+                                    );
+                                });
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.add_space(86.0);
+                                    for preset in app.config.ai_provider.preset_models() {
+                                        let sel = app.config.ai_model.trim() == preset.id
+                                            || (app.config.ai_model.trim().is_empty()
+                                                && preset.id == app.config.ai_provider.default_model());
+                                        let badge = if es { preset.badge_es } else { preset.badge_en };
+                                        let tip = if es { preset.tip_es } else { preset.tip_en };
+                                        let chip = format!("{}  •  {}", preset.id, badge);
+                                        if ui
+                                            .selectable_label(
+                                                sel,
+                                                RichText::new(chip).monospace().size(10.5),
+                                            )
+                                            .on_hover_text(tip)
+                                            .clicked()
+                                        {
+                                            app.config.ai_model = preset.id.to_string();
+                                            app.test_ai_state = ProviderTestState::Idle;
+                                            need_save = true;
+                                        }
+                                    }
+                                });
+
+                                ui.add_space(6.0);
+                                // Base URL (required for Custom, optional override for proxies/gateways)
+                                ui.horizontal(|ui| {
+                                    ui.add_sized(
+                                        [82.0, 20.0],
+                                        egui::Label::new(RichText::new("Base URL").size(11.5)),
+                                    );
+                                    let w = (ui.available_width() - 4.0).max(220.0);
+                                    if ui
+                                        .add(
+                                            egui::TextEdit::singleline(&mut app.config.ai_base_url)
+                                                .desired_width(w)
+                                                .hint_text(if app.config.ai_provider == AiProviderKind::Custom {
+                                                    "http://localhost:11434/v1  (or paste any custom OpenAI-compatible URL)"
+                                                } else {
+                                                    app.config.ai_provider.default_endpoint()
+                                                }),
+                                        )
+                                        .changed()
+                                    {
+                                        need_save = true;
+                                        app.test_ai_state = ProviderTestState::Idle;
+                                    }
+                                });
+
+                                // Known Base URL presets (1-click fill, or leave/type custom URL above)
+                                let url_presets = app.config.ai_provider.base_url_presets();
+                                if !url_presets.is_empty() {
+                                    ui.add_space(3.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(86.0);
+                                        ui.label(
+                                            RichText::new(if es {
+                                                "Base URLs conocidas (o escribe tu URL personalizada arriba):"
+                                            } else {
+                                                "Known Base URLs (or enter any custom URL above):"
+                                            })
+                                            .size(10.5)
+                                            .color(theme::TEXT_MUTED),
+                                        );
+                                    });
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.add_space(86.0);
+                                        let cur_url = app
+                                            .config
+                                            .ai_base_url
+                                            .trim()
+                                            .trim_end_matches('/')
+                                            .to_string();
+                                        for bp in url_presets {
+                                            let bp_clean = bp.base_url.trim_end_matches('/');
+                                            let sel = if bp_clean.is_empty() {
+                                                cur_url.is_empty()
+                                            } else {
+                                                cur_url.eq_ignore_ascii_case(bp_clean)
+                                                    || cur_url.starts_with(bp_clean)
+                                            };
+                                            let tip = if bp.base_url.is_empty() {
+                                                if es {
+                                                    bp.tip_es.to_string()
+                                                } else {
+                                                    bp.tip_en.to_string()
+                                                }
+                                            } else if es {
+                                                format!("{}\n{}", bp.base_url, bp.tip_es)
+                                            } else {
+                                                format!("{}\n{}", bp.base_url, bp.tip_en)
+                                            };
+                                            if ui
+                                                .selectable_label(
+                                                    sel,
+                                                    RichText::new(bp.label).size(10.5),
+                                                )
+                                                .on_hover_text(tip)
+                                                .clicked()
+                                            {
+                                                app.config.ai_base_url = bp.base_url.to_string();
+                                                if let Some(m) = bp.suggested_model {
+                                                    app.config.ai_model = m.to_string();
+                                                }
+                                                app.test_ai_state = ProviderTestState::Idle;
+                                                need_save = true;
+                                            }
+                                        }
+                                    });
+                                }
+
+                                render_test_status(ui, &app.test_ai_state, t.testing_token);
+
+                                ui.add_space(4.0);
+                                egui::CollapsingHeader::new(
+                                    RichText::new(if es {
+                                        "Cómo configurar OpenAI, Anthropic, OpenRouter, Gemini o Custom/Local"
+                                    } else {
+                                        "How to configure OpenAI, Anthropic, OpenRouter, Gemini, or Custom/Local"
+                                    })
+                                    .size(11.5)
+                                    .color(theme::ACCENT_CYAN),
+                                )
+                                .id_salt("guide_ai_reviewer")
+                                .show(ui, |ui| {
+                                    let steps: &[&str] = if es {
+                                        &[
+                                            "• OpenAI: clave en platform.openai.com/api-keys — recomendados: gpt-6.2-sol (diario) o gpt-6.2-astra (auditoría profunda).",
+                                            "• Anthropic (Claude): clave en console.anthropic.com/settings/keys — recomendados: claude-sonnet-5-5 (mejor review) o claude-opus-5-5.",
+                                            "• OpenRouter: 1 sola clave en openrouter.ai/keys para acceder a Claude 5.5, GPT-6.2, Gemini 4, DeepSeek V4 Pro y Qwen3-Coder.",
+                                            "• Gemini: clave en aistudio.google.com/apikey — recomendados: gemini-2.5-flash (capa gratuita/rápido), gemini-2.5-pro o gemini-4-neon (1M contexto).",
+                                            "• Custom / Local: elige un preset (Ollama, LM Studio, vLLM, DeepSeek, Groq, xAI, Mistral, Together, Fireworks) o pega tu propia Base URL OpenAI-compatible.",
+                                        ]
+                                    } else {
+                                        &[
+                                            "• OpenAI: key at platform.openai.com/api-keys — recommended: gpt-6.2-sol (daily) or gpt-6.2-astra (deep audit).",
+                                            "• Anthropic (Claude): key at console.anthropic.com/settings/keys — recommended: claude-sonnet-5-5 (best review) or claude-opus-5-5.",
+                                            "• OpenRouter: single key at openrouter.ai/keys for Claude 5.5, GPT-6.2, Gemini 4, DeepSeek V4 Pro, and Qwen3-Coder.",
+                                            "• Gemini: key at aistudio.google.com/apikey — recommended: gemini-2.5-flash (free tier/fast), gemini-2.5-pro, or gemini-4-neon (1M context).",
+                                            "• Custom / Local: pick a preset (Ollama, LM Studio, vLLM, DeepSeek, Groq, xAI, Mistral, Together, Fireworks) or enter any custom OpenAI-compatible Base URL.",
+                                        ]
+                                    };
+                                    for s in steps {
+                                        ui.label(
+                                            RichText::new(*s)
+                                                .size(11.0)
+                                                .color(theme::TEXT_SECONDARY),
+                                        );
+                                    }
+                                });
+                            });
+
+                        ui.add_space(8.0);
+
+                        // Card 2: Custom Team Rules / Conventions
+                        egui::Frame::none()
+                            .fill(theme::BG_SURFACE)
+                            .rounding(Rounding::same(9.0))
+                            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                            .inner_margin(Margin::same(12.0))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Reglas extra de revisión (opcional)"
+                                    } else {
+                                        "Extra Review Rules & Team Conventions (optional)"
+                                    })
+                                    .size(12.5)
+                                    .strong()
+                                    .color(theme::ACCENT_CYAN),
+                                );
+                                ui.label(
+                                    RichText::new(if es {
+                                        "Agrega reglas de tu equipo (ej. arquitectura, seguridad OWASP, convenciones de nombres o tests obligatorios)."
+                                    } else {
+                                        "Add project-specific rules (e.g. architecture guidelines, OWASP checks, naming conventions, required tests)."
+                                    })
+                                    .size(11.0)
+                                    .color(theme::TEXT_MUTED),
+                                );
+                                ui.add_space(6.0);
+                                let w = (ui.available_width() - 4.0).max(260.0);
+                                if ui
+                                    .add(
+                                        egui::TextEdit::multiline(
+                                            &mut app.config.ai_custom_instructions,
+                                        )
+                                        .desired_rows(3)
+                                        .desired_width(w)
+                                        .hint_text(if es {
+                                            "Ej: Reportar cualquier query SQL sin parámetros, evitar unwrap() en producción, verificar tests unitarios..."
+                                        } else {
+                                            "e.g. Flag unparameterized SQL, disallow unwrap() in production paths, check unit test coverage..."
+                                        }),
+                                    )
+                                    .changed()
+                                {
+                                    need_save = true;
+                                }
+                            });
+                        });
+                    }
                 });
 
             ui.add_space(10.0);
@@ -2121,6 +2586,10 @@ fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     if let Some(kind) = test_provider {
         app.config.save();
         app.test_provider_token(kind, ctx.clone());
+    }
+    if test_ai_now {
+        app.config.save();
+        app.test_ai_connection(ctx.clone());
     }
     if open_help {
         app.settings_open = false;
@@ -2303,11 +2772,22 @@ fn show_error_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     let mut copy_now = false;
     let mut open_troubleshoot = false;
     let mut open_provider_cfg = false;
-    let is_api_error = app.error_modal.raw_error.contains("API error")
-        || app.error_modal.raw_error.contains("HTTP 40");
+    let is_ai_error = app.error_modal.raw_error.contains("AI API Error");
+    let is_api_error = !is_ai_error
+        && (app.error_modal.raw_error.contains("API error")
+            || app.error_modal.raw_error.contains("HTTP 40"));
+    let modal_title = if is_ai_error {
+        if app.config.language == Language::Es {
+            "Error de IA"
+        } else {
+            "AI Reviewer Error"
+        }
+    } else {
+        t.error_modal_title
+    };
 
     egui::Window::new(
-        RichText::new(format!("✕  {}", t.error_modal_title))
+        RichText::new(format!("✕  {modal_title}"))
             .color(theme::ACCENT_ROSE)
             .strong(),
     )
@@ -2401,11 +2881,16 @@ fn show_error_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
                 open_troubleshoot = true;
             }
 
-            if is_api_error
+            if (is_api_error || is_ai_error)
                 && ui
                     .add(
                         egui::Button::new(
-                            RichText::new(t.pr_configure_token).color(theme::ACCENT_AMBER),
+                            RichText::new(if is_ai_error {
+                                t.ai_configure_btn
+                            } else {
+                                t.pr_configure_token
+                            })
+                            .color(theme::ACCENT_AMBER),
                         )
                         .min_size(egui::vec2(0.0, 28.0)),
                     )
@@ -2431,7 +2916,13 @@ fn show_error_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     }
     if open_troubleshoot {
         let raw_lower = app.error_modal.raw_error.to_lowercase();
-        app.help_search = if raw_lower.contains("bitbucket") {
+        app.help_search = if is_ai_error {
+            if app.config.language == Language::Es {
+                "Revisor IA".to_string()
+            } else {
+                "AI Reviewer".to_string()
+            }
+        } else if raw_lower.contains("bitbucket") {
             "Bitbucket".to_string()
         } else if raw_lower.contains("gitlab") {
             "GitLab".to_string()
@@ -2445,7 +2936,11 @@ fn show_error_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     }
     if open_provider_cfg {
         app.error_modal.open = false;
-        app.settings_tab = SettingsTab::Providers;
+        app.settings_tab = if is_ai_error {
+            SettingsTab::Ai
+        } else {
+            SettingsTab::Providers
+        };
         app.settings_open = true;
     }
     if close_now {

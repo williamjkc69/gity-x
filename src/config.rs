@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::ai_review::{AiConfig, AiProviderKind};
 use crate::i18n::Language;
 use crate::providers::ProviderAuth;
 
@@ -79,6 +80,12 @@ pub struct AppConfig {
     pub gitlab_token: String,
     pub bitbucket_user: String,
     pub bitbucket_token: String,
+    pub ai_enabled: bool,
+    pub ai_provider: AiProviderKind,
+    pub ai_api_key: String,
+    pub ai_model: String,
+    pub ai_base_url: String,
+    pub ai_custom_instructions: String,
     pub open_tabs: Vec<String>,
     pub recent_repos: Vec<String>,
 }
@@ -105,6 +112,12 @@ impl Default for AppConfig {
             gitlab_token: String::new(),
             bitbucket_user: String::new(),
             bitbucket_token: String::new(),
+            ai_enabled: false,
+            ai_provider: AiProviderKind::OpenAi,
+            ai_api_key: String::new(),
+            ai_model: String::new(),
+            ai_base_url: String::new(),
+            ai_custom_instructions: String::new(),
             open_tabs: Vec::new(),
             recent_repos: Vec::new(),
         }
@@ -199,6 +212,24 @@ impl AppConfig {
                     "bitbucket_token" => {
                         cfg.bitbucket_token = val.trim().to_string();
                     }
+                    "ai_enabled" => {
+                        cfg.ai_enabled = val.trim() == "true";
+                    }
+                    "ai_provider" => {
+                        cfg.ai_provider = AiProviderKind::from_str(val);
+                    }
+                    "ai_api_key" => {
+                        cfg.ai_api_key = val.trim().to_string();
+                    }
+                    "ai_model" => {
+                        cfg.ai_model = val.trim().to_string();
+                    }
+                    "ai_base_url" => {
+                        cfg.ai_base_url = val.trim().to_string();
+                    }
+                    "ai_custom_instructions" => {
+                        cfg.ai_custom_instructions = val.replace("\\n", "\n");
+                    }
                     "tab" => {
                         let p = val.trim().to_string();
                         if !p.is_empty() && !cfg.open_tabs.contains(&p) {
@@ -259,6 +290,21 @@ impl AppConfig {
         if !self.bitbucket_token.trim().is_empty() {
             out.push_str(&format!("bitbucket_token={}\n", self.bitbucket_token.trim()));
         }
+        out.push_str(&format!("ai_enabled={}\n", self.ai_enabled));
+        out.push_str(&format!("ai_provider={}\n", self.ai_provider.as_str()));
+        if !self.ai_api_key.trim().is_empty() {
+            out.push_str(&format!("ai_api_key={}\n", self.ai_api_key.trim()));
+        }
+        if !self.ai_model.trim().is_empty() {
+            out.push_str(&format!("ai_model={}\n", self.ai_model.trim()));
+        }
+        if !self.ai_base_url.trim().is_empty() {
+            out.push_str(&format!("ai_base_url={}\n", self.ai_base_url.trim()));
+        }
+        if !self.ai_custom_instructions.trim().is_empty() {
+            let escaped = self.ai_custom_instructions.trim().replace('\n', "\\n");
+            out.push_str(&format!("ai_custom_instructions={escaped}\n"));
+        }
         for t in self.open_tabs.iter().take(12) {
             out.push_str(&format!("tab={t}\n"));
         }
@@ -280,6 +326,17 @@ impl AppConfig {
             gitlab_token: self.gitlab_token.clone(),
             bitbucket_user: self.bitbucket_user.clone(),
             bitbucket_token: self.bitbucket_token.clone(),
+        }
+    }
+
+    pub fn ai_config(&self) -> AiConfig {
+        AiConfig {
+            enabled: self.ai_enabled,
+            provider: self.ai_provider,
+            api_key: self.ai_api_key.clone(),
+            model: self.ai_model.clone(),
+            base_url: self.ai_base_url.clone(),
+            custom_instructions: self.ai_custom_instructions.clone(),
         }
     }
 

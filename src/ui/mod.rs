@@ -3,6 +3,7 @@ pub mod diff_view;
 pub mod graph_view;
 pub mod help_modal;
 pub mod inspector;
+pub mod markdown;
 pub mod pr_view;
 pub mod sidebar;
 pub mod toolbar;

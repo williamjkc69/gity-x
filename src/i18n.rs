@@ -243,12 +243,22 @@ pub struct Strings {
     pub troubleshoot_btn: &'static str,
     pub settings_tab_general: &'static str,
     pub settings_tab_providers: &'static str,
+    pub settings_tab_ai: &'static str,
     pub test_token_btn: &'static str,
     pub testing_token: &'static str,
     pub show_tokens: &'static str,
     pub hide_tokens: &'static str,
     pub pr_click_to_expand: &'static str,
     pub pr_token_missing_banner: &'static str,
+    pub ai_review_btn: &'static str,
+    pub ai_reviewing_msg: &'static str,
+    pub ai_report_title: &'static str,
+    pub ai_copy_report: &'static str,
+    pub ai_post_comment: &'static str,
+    pub ai_request_changes_report: &'static str,
+    pub ai_edit_in_composer: &'static str,
+    pub ai_rerun_btn: &'static str,
+    pub ai_configure_btn: &'static str,
 }
 
 pub const EN: Strings = Strings {
@@ -443,12 +453,22 @@ pub const EN: Strings = Strings {
     troubleshoot_btn: "Troubleshoot",
     settings_tab_general: "General & Graph",
     settings_tab_providers: "Git Providers & Tokens",
+    settings_tab_ai: "AI Reviewer",
     test_token_btn: "Test",
     testing_token: "Testing...",
     show_tokens: "Show",
     hide_tokens: "Hide",
     pr_click_to_expand: "Click any Pull Request to expand details, conversation, commits, and diffs.",
     pr_token_missing_banner: "No API token detected — private repos return HTTP 404 without authentication.",
+    ai_review_btn: "◆ AI Review",
+    ai_reviewing_msg: "Analyzing diff for security, performance, bugs & best practices...",
+    ai_report_title: "AI Code Review Report",
+    ai_copy_report: "Copy Report",
+    ai_post_comment: "Post as PR Comment",
+    ai_request_changes_report: "Request Changes",
+    ai_edit_in_composer: "Edit in Composer",
+    ai_rerun_btn: "Re-run",
+    ai_configure_btn: "Configure AI",
 };
 
 pub const ES: Strings = Strings {
@@ -643,12 +663,22 @@ pub const ES: Strings = Strings {
     troubleshoot_btn: "Solucionar",
     settings_tab_general: "General y Grafo",
     settings_tab_providers: "Proveedores Git y Tokens",
+    settings_tab_ai: "Revisor IA",
     test_token_btn: "Probar",
     testing_token: "Probando...",
     show_tokens: "Mostrar",
     hide_tokens: "Ocultar",
     pr_click_to_expand: "Haz clic en cualquier Pull Request para expandir detalles, conversación, commits y diffs.",
     pr_token_missing_banner: "No se detectó token de API — los repos privados devuelven HTTP 404 sin autenticación.",
+    ai_review_btn: "◆ Revisar con IA",
+    ai_reviewing_msg: "Analizando diff en seguridad, rendimiento, bugs y buenas prácticas...",
+    ai_report_title: "Reporte de Revisión con IA",
+    ai_copy_report: "Copiar Reporte",
+    ai_post_comment: "Comentar en PR",
+    ai_request_changes_report: "Pedir Cambios",
+    ai_edit_in_composer: "Editar en Comentario",
+    ai_rerun_btn: "Re-analizar",
+    ai_configure_btn: "Configurar IA",
 };
 
 pub fn tr(lang: Language) -> &'static Strings {
@@ -719,6 +749,55 @@ pub fn format_human_date(iso: &str, lang: Language) -> String {
 /// Translates common cryptic git errors into a clear summary + actionable hint.
 pub fn humanize_git_error(raw: &str, lang: Language) -> (&'static str, &'static str) {
     let lower = raw.to_lowercase();
+
+    if lower.contains("ai api error") {
+        if lower.contains("http 401") {
+            return match lang {
+                Language::En => (
+                    "AI API key rejected (HTTP 401)",
+                    "Verify your AI API key in Settings → AI Reviewer and click Test.",
+                ),
+                Language::Es => (
+                    "Clave API de IA rechazada (HTTP 401)",
+                    "Verifica tu API Key en Configuración → Revisor IA y pulsa Probar.",
+                ),
+            };
+        }
+        if lower.contains("http 404") {
+            return match lang {
+                Language::En => (
+                    "AI model or endpoint URL not found (HTTP 404)",
+                    "Leave Base URL empty to use the provider default, or pick a preset model in Settings → AI Reviewer.",
+                ),
+                Language::Es => (
+                    "Modelo de IA o Base URL no encontrada (HTTP 404)",
+                    "Deja Base URL vacío para usar el endpoint oficial por defecto o elige un modelo sugerido en Configuración → Revisor IA.",
+                ),
+            };
+        }
+        if lower.contains("http 429") {
+            return match lang {
+                Language::En => (
+                    "AI provider rate limit or quota exceeded (HTTP 429)",
+                    "Check billing/quota on your AI provider account, or switch provider/model in Settings → AI Reviewer.",
+                ),
+                Language::Es => (
+                    "Límite o cuota de IA excedida (HTTP 429)",
+                    "Revisa el saldo o límite en tu cuenta de IA, o cambia de modelo/proveedor en Configuración → Revisor IA.",
+                ),
+            };
+        }
+        return match lang {
+            Language::En => (
+                "AI Code Review request failed",
+                "Check your provider, API key, model, and Base URL in Settings → AI Reviewer, then click Test.",
+            ),
+            Language::Es => (
+                "Falló la solicitud de revisión con IA",
+                "Revisa proveedor, API key, modelo y Base URL en Configuración → Revisor IA y pulsa Probar.",
+            ),
+        };
+    }
 
     if lower.contains("would be overwritten") || lower.contains("local changes") {
         return match lang {

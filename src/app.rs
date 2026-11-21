@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
+use crate::ai_review::{self, AiReviewState};
 use crate::config::AppConfig;
 use crate::git::{
     BranchInfo, Commit, CommitFileChange, FileStatus, GitRepo, StashEntry, TagInfo,
@@ -63,6 +64,7 @@ pub enum PrActionKind {
 pub enum SettingsTab {
     General,
     Providers,
+    Ai,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -97,6 +99,13 @@ enum PrAsyncMsg {
         kind: ProviderKind,
         res: Result<String, String>,
     },
+    AiReviewDone {
+        repo_path: PathBuf,
+        pr_number: u64,
+        model: String,
+        res: Result<String, String>,
+    },
+    AiTested(Result<String, String>),
 }
 
 #[derive(Debug, Clone)]
@@ -256,6 +265,8 @@ pub struct GitKrakenApp {
     pub test_gh_state: ProviderTestState,
     pub test_gl_state: ProviderTestState,
     pub test_bb_state: ProviderTestState,
+    pub test_ai_state: ProviderTestState,
+    pub ai_review_state: AiReviewState,
     pub help_open: bool,
     pub help_search: String,
     pub shortcuts_open: bool,
@@ -354,6 +365,8 @@ impl GitKrakenApp {
             test_gh_state: ProviderTestState::Idle,
             test_gl_state: ProviderTestState::Idle,
             test_bb_state: ProviderTestState::Idle,
+            test_ai_state: ProviderTestState::Idle,
+            ai_review_state: AiReviewState::Idle,
             help_open: false,
             help_search: String::new(),
             shortcuts_open: false,
@@ -449,6 +462,7 @@ impl GitKrakenApp {
         self.pr_loading_detail = false;
         self.pr_action_busy = false;
         self.pr_list_loaded_once = false;
+        self.ai_review_state = AiReviewState::Idle;
         self.pr_list_req_id = self.pr_list_req_id.wrapping_add(1);
         self.pr_detail_req_id = self.pr_detail_req_id.wrapping_add(1);
     }
@@ -1004,6 +1018,48 @@ impl GitKrakenApp {
         });
     }
 
+    pub fn test_ai_connection(&mut self, ctx: egui::Context) {
+        self.test_ai_state = ProviderTestState::Testing;
+        let ai_cfg = self.config.ai_config();
+        let tx = self.pr_tx.clone();
+        std::thread::spawn(move || {
+            let res = ai_review::test_ai_connection(&ai_cfg);
+            let _ = tx.send(PrAsyncMsg::AiTested(res));
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn run_ai_pr_review(&mut self, detail: PullRequestDetail, ctx: egui::Context) {
+        let Some(repo) = self.repo.as_ref() else {
+            return;
+        };
+        let ai_cfg = self.config.ai_config();
+        if !ai_cfg.enabled || !ai_cfg.has_credentials() {
+            self.settings_tab = SettingsTab::Ai;
+            self.settings_open = true;
+            return;
+        }
+        let pr_number = detail.summary.number;
+        let model = ai_cfg.resolved_model();
+        let repo_path = repo.path.clone();
+        let lang = self.config.language;
+        self.ai_review_state = AiReviewState::Running {
+            pr_number,
+            model: model.clone(),
+        };
+        let tx = self.pr_tx.clone();
+        std::thread::spawn(move || {
+            let res = ai_review::review_pull_request(&ai_cfg, &detail, lang);
+            let _ = tx.send(PrAsyncMsg::AiReviewDone {
+                repo_path,
+                pr_number,
+                model,
+                res,
+            });
+            ctx.request_repaint();
+        });
+    }
+
     pub fn fetch_pr_detail(&mut self, number: u64, ctx: Option<egui::Context>) {
         let Some(repo) = self.repo.as_ref() else {
             return;
@@ -1313,6 +1369,39 @@ impl GitKrakenApp {
                         ProviderKind::GitLab => self.test_gl_state = st,
                         ProviderKind::Bitbucket => self.test_bb_state = st,
                     }
+                }
+                PrAsyncMsg::AiReviewDone {
+                    repo_path,
+                    pr_number,
+                    model,
+                    res,
+                } => {
+                    if self.repo.as_ref().map(|r| &r.path) != Some(&repo_path) {
+                        continue;
+                    }
+                    match res {
+                        Ok(report) => {
+                            self.ai_review_state = AiReviewState::Ready {
+                                pr_number,
+                                model,
+                                report,
+                            };
+                            self.set_info(format!("AI review ready for PR #{pr_number}."));
+                        }
+                        Err(err) => {
+                            self.ai_review_state = AiReviewState::Error {
+                                pr_number,
+                                message: err.clone(),
+                            };
+                            self.set_error(err);
+                        }
+                    }
+                }
+                PrAsyncMsg::AiTested(res) => {
+                    self.test_ai_state = match res {
+                        Ok(msg) => ProviderTestState::Ok(msg),
+                        Err(err) => ProviderTestState::Err(err),
+                    };
                 }
             }
         }

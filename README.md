@@ -50,9 +50,10 @@ Built-in searchable Help Center (English & Español) with verified solutions, co
 - **Unified Pull Requests / Merge Requests (`GitHub`, `GitLab`, `Bitbucket`)**:
   - Auto-detects provider from `git remote origin` (SSH & HTTPS, nested GitLab groups, self-hosted `gitlab.*` & GitHub Enterprise)
   - Clean collapsible PR list (`Open` / `Merged` / `Closed` / `All`) with instant search and lazy detail loading
-  - Automatic **Markdown** rendering for PR descriptions & comments (headings, fenced code blocks, tables, task checklists, blockquotes, inline code, clickable links)
+  - Automatic **Markdown & HTML** rendering for PR descriptions & comments (headings, `<details>/<summary>` collapsible blocks, fenced code blocks, Markdown & HTML tables, task checklists, blockquotes, `<kbd>`/`<code>` pills, clickable links & image links)
   - Review & lifecycle actions: **Approve**, **Request changes**, **Comment**, **Close / Decline**, **Reopen**, **Checkout branch**, **Open in browser**
   - Unified **Merge** strategy selector across providers: **Merge commit**, **Squash and merge**, and **Rebase / Fast-forward merge**
+  - **AI Code Review (`◆ AI Review`)**: Copilot-style automated PR review using **OpenAI**, **Anthropic (Claude)**, **OpenRouter**, **Google Gemini**, or **Custom** OpenAI-compatible endpoints (Ollama, LM Studio, DeepSeek, Groq) — audits security (OWASP), bugs, performance, linting, and best practices, with 1-click **Post as PR Comment**, **Request Changes**, **Edit in Composer**, or **Copy Report**
   - Auto-detects `gh auth token` on macOS (including Finder `.app` bundles), Linux, and Windows, plus live `Test` token verification in Settings
 - **Automatic In-Place App Updates**:
   - Checks GitHub Releases once on startup (0% idle CPU, toggleable in Settings)
@@ -203,15 +204,15 @@ Get-FileHash .\gity-x-v*-windows-x64.exe -Algorithm SHA256
 Push any semantic version tag (`vX.Y.Z`) to automatically build and publish macOS `.dmg` & `.tar.gz` (arm64 + x64), Windows `.exe`, Linux `.deb` & `.AppImage`, and `SHA256SUMS.txt` via GitHub Actions:
 
 ```bash
-git tag -a v0.3.2 -m "Release v0.3.2"
-git push origin v0.3.2
+git tag -a v0.4.0 -m "Release v0.4.0"
+git push origin v0.4.0
 ```
 
 ### Build Local macOS `.dmg` & `.tar.gz`
 
 ```bash
-./scripts/package-macos.sh 0.3.2
-# Output: dist/gity-x-v0.3.2-macos-arm64.dmg & .tar.gz
+./scripts/package-macos.sh 0.4.0
+# Output: dist/gity-x-v0.4.0-macos-arm64.dmg & .tar.gz
 ```
 
 ## Author

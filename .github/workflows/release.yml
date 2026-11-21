@@ -211,11 +211,14 @@ jobs:
     needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
-      - name: Resolve tag
+      - name: Resolve tag & release notes
         id: ver
         run: |
           TAG="${GITHUB_REF_NAME}"
@@ -223,6 +226,20 @@ jobs:
             TAG="${{ github.event.inputs.tag }}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          python3 - "$TAG" <<'PY' > release-notes.md
+          import os, re, sys
+          tag = sys.argv[1]
+          notes = ""
+          if os.path.exists("CHANGELOG.md"):
+              text = open("CHANGELOG.md", encoding="utf-8").read()
+              m = re.search(rf"(?ms)^## \[{re.escape(tag)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text)
+              if m:
+                  notes = m.group(1).strip()
+          if notes:
+              print(notes)
+          PY
+          cat release-notes.md
       - name: Generate SHA-256 Checksums
         run: |
           cd artifacts
@@ -233,5 +250,6 @@ jobs:
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: gity x ${{ steps.ver.outputs.tag }}
+          body_path: release-notes.md
           generate_release_notes: true
           files: artifacts/*

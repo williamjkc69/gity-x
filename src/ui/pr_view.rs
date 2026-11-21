@@ -1,9 +1,8 @@
 use eframe::egui::{
-    self,
-    text::{LayoutJob, TextFormat},
-    Align, Color32, FontId, Layout, Margin, RichText, Rounding, Sense, Stroke, Vec2,
+    self, Align, Color32, FontId, Layout, Margin, RichText, Rounding, Sense, Stroke, Vec2,
 };
 
+use crate::ai_review::AiReviewState;
 use crate::app::{GitKrakenApp, PrActionKind, PrDetailTab, SettingsTab};
 use crate::i18n::format_human_date;
 use crate::providers::{
@@ -502,6 +501,42 @@ fn show_expanded_pr_detail(
                     r.checkout(&br)
                 });
             }
+            if app.config.ai_enabled {
+                let ai_cfg = app.config.ai_config();
+                let ai_ready = ai_cfg.has_credentials();
+                let ai_running = matches!(
+                    &app.ai_review_state,
+                    AiReviewState::Running { pr_number, .. } if *pr_number == pr.number
+                );
+                let (lbl, bg, stroke) = if ai_ready {
+                    (
+                        RichText::new(t.ai_review_btn).strong().color(Color32::WHITE),
+                        Color32::from_rgb(56, 44, 88),
+                        theme::ACCENT_PURPLE,
+                    )
+                } else {
+                    (
+                        RichText::new(format!("◆ {}", t.ai_configure_btn))
+                            .strong()
+                            .color(theme::ACCENT_AMBER),
+                        Color32::from_rgb(56, 46, 26),
+                        theme::ACCENT_AMBER,
+                    )
+                };
+                if ui
+                    .add_enabled(
+                        !ai_running,
+                        egui::Button::new(lbl)
+                            .fill(bg)
+                            .stroke(Stroke::new(1.0_f32, stroke))
+                            .min_size(Vec2::new(0.0, 24.0)),
+                    )
+                    .on_hover_text(t.ai_reviewing_msg)
+                    .clicked()
+                {
+                    app.run_ai_pr_review(detail.clone(), ctx.clone());
+                }
+            }
         });
     });
 
@@ -634,6 +669,153 @@ fn show_expanded_pr_detail(
 
     ui.add_space(8.0);
 
+    // 2.5 AI Code Review Report Card (when running / ready / error for this PR)
+    let mut dismiss_ai = false;
+    let mut rerun_ai = false;
+    let mut open_ai_settings = false;
+    let mut edit_report_in_composer: Option<String> = None;
+
+    match app.ai_review_state.clone() {
+        AiReviewState::Running { pr_number, model } if pr_number == pr.number => {
+            egui::Frame::none()
+                .fill(Color32::from_rgb(36, 32, 54))
+                .rounding(Rounding::same(8.0))
+                .stroke(Stroke::new(1.0_f32, theme::ACCENT_PURPLE))
+                .inner_margin(Margin::symmetric(12.0, 10.0))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("◆ {} ({model})", t.ai_reviewing_msg))
+                                .size(12.5)
+                                .strong()
+                                .color(theme::ACCENT_PURPLE),
+                        );
+                    });
+                });
+            ui.add_space(8.0);
+        }
+        AiReviewState::Ready {
+            pr_number,
+            model,
+            report,
+        } if pr_number == pr.number => {
+            egui::Frame::none()
+                .fill(Color32::from_rgb(28, 28, 42))
+                .rounding(Rounding::same(9.0))
+                .stroke(Stroke::new(1.0_f32, theme::ACCENT_PURPLE.linear_multiply(0.85)))
+                .inner_margin(Margin::same(12.0))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("◆ {} ({model})", t.ai_report_title))
+                                .size(13.0)
+                                .strong()
+                                .color(theme::ACCENT_PURPLE),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.small_button("×").clicked() {
+                                dismiss_ai = true;
+                            }
+                            if ui.small_button(t.ai_rerun_btn).clicked() {
+                                rerun_ai = true;
+                            }
+                            if ui.small_button(t.ai_copy_report).clicked() {
+                                ctx.copy_text(report.clone());
+                                app.set_info(t.copied_btn);
+                            }
+                            if ui.small_button(t.ai_edit_in_composer).clicked() {
+                                edit_report_in_composer = Some(report.clone());
+                            }
+                            if is_open_like
+                                && ui
+                                    .add_enabled(
+                                        !busy,
+                                        egui::Button::new(
+                                            RichText::new(t.ai_request_changes_report)
+                                                .size(11.5)
+                                                .color(theme::ACCENT_AMBER),
+                                        )
+                                        .min_size(Vec2::new(0.0, 22.0)),
+                                    )
+                                    .clicked()
+                            {
+                                pending_action =
+                                    Some(PrActionKind::RequestChanges(report.clone()));
+                            }
+                            if ui
+                                .add_enabled(
+                                    !busy,
+                                    egui::Button::new(
+                                        RichText::new(t.ai_post_comment)
+                                            .size(11.5)
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    )
+                                    .fill(Color32::from_rgb(44, 58, 92))
+                                    .stroke(Stroke::new(1.0_f32, theme::ACCENT_CYAN))
+                                    .min_size(Vec2::new(0.0, 22.0)),
+                                )
+                                .clicked()
+                            {
+                                pending_action = Some(PrActionKind::Comment(report.clone()));
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    crate::ui::markdown::render(ui, &report, 12.0);
+                });
+            ui.add_space(8.0);
+        }
+        AiReviewState::Error { pr_number, message } if pr_number == pr.number => {
+            egui::Frame::none()
+                .fill(Color32::from_rgb(56, 28, 36))
+                .rounding(Rounding::same(8.0))
+                .stroke(Stroke::new(1.0_f32, theme::ACCENT_ROSE))
+                .inner_margin(Margin::symmetric(12.0, 8.0))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("× {message}"))
+                                .size(12.0)
+                                .color(theme::DIFF_DEL_FG),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.small_button("×").clicked() {
+                                dismiss_ai = true;
+                            }
+                            if ui.small_button(t.ai_rerun_btn).clicked() {
+                                rerun_ai = true;
+                            }
+                            if ui.small_button(t.ai_configure_btn).clicked() {
+                                open_ai_settings = true;
+                            }
+                        });
+                    });
+                });
+            ui.add_space(8.0);
+        }
+        _ => {}
+    }
+
+    if dismiss_ai {
+        app.ai_review_state = AiReviewState::Idle;
+    } else if rerun_ai {
+        app.run_ai_pr_review(detail.clone(), ctx.clone());
+    }
+    if open_ai_settings {
+        app.settings_tab = SettingsTab::Ai;
+        app.settings_open = true;
+    }
+    if let Some(rep) = edit_report_in_composer {
+        app.pr_comment_draft = rep;
+        app.pr_detail_tab = PrDetailTab::Conversation;
+    }
+
     // 3. GitHub-style Sub-Tabs: Conversation | Commits | Files changed
     ui.horizontal(|ui| {
         let tabs = [
@@ -714,7 +896,7 @@ fn show_expanded_pr_detail(
                                 .italics(),
                         );
                     } else {
-                        render_pr_body(ui, &pr.body, 12.5);
+                        crate::ui::markdown::render(ui, &pr.body, 12.5);
                     }
                 });
 
@@ -774,7 +956,7 @@ fn show_expanded_pr_detail(
                         });
                         if !comment.body.trim().is_empty() {
                             ui.add_space(4.0);
-                            render_pr_body(ui, &comment.body, 12.0);
+                            crate::ui::markdown::render(ui, &comment.body, 12.0);
                         }
                     });
                 ui.add_space(5.0);
@@ -994,501 +1176,4 @@ fn draw_branch_chip(ui: &mut egui::Ui, name: &str) {
                     .color(theme::ACCENT_CYAN),
             );
         });
-}
-
-fn strip_html_comments(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut rest = input;
-    while let Some(start) = rest.find("<!--") {
-        out.push_str(&rest[..start]);
-        if let Some(end) = rest[start + 4..].find("-->") {
-            rest = &rest[start + 4 + end + 3..];
-        } else {
-            return out;
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-fn looks_like_markdown(text: &str) -> bool {
-    if text.contains("```")
-        || text.contains("**")
-        || text.contains("~~")
-        || text.contains('`')
-        || (text.contains("](") && text.contains('['))
-    {
-        return true;
-    }
-    for line in text.lines() {
-        let t = line.trim_start();
-        if t.starts_with("# ")
-            || t.starts_with("## ")
-            || t.starts_with("### ")
-            || t.starts_with("#### ")
-            || t.starts_with("- ")
-            || t.starts_with("* ")
-            || t.starts_with("> ")
-            || t == "---"
-            || t == "***"
-            || t == "___"
-            || (t.starts_with('|') && t.ends_with('|'))
-            || parse_ordered_list_prefix(t).is_some()
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn render_pr_body(ui: &mut egui::Ui, raw: &str, base_size: f32) {
-    let cleaned = strip_html_comments(raw);
-    let body = cleaned.trim();
-    if body.is_empty() {
-        return;
-    }
-
-    if !looks_like_markdown(body) {
-        ui.label(
-            RichText::new(body)
-                .size(base_size)
-                .color(theme::TEXT_PRIMARY),
-        );
-        return;
-    }
-
-    let lines: Vec<&str> = body.lines().collect();
-    let mut i = 0;
-
-    while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim();
-
-        // Blank line spacing
-        if trimmed.is_empty() {
-            ui.add_space(5.0);
-            i += 1;
-            continue;
-        }
-
-        // Fenced code block (``` or ~~~)
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            let fence = &trimmed[..3];
-            let lang = trimmed[3..].trim();
-            i += 1;
-            let mut code = String::new();
-            while i < lines.len() && !lines[i].trim().starts_with(fence) {
-                if !code.is_empty() {
-                    code.push('\n');
-                }
-                code.push_str(lines[i]);
-                i += 1;
-            }
-            if i < lines.len() {
-                i += 1; // skip closing fence
-            }
-            egui::Frame::none()
-                .fill(theme::BG_SURFACE)
-                .rounding(Rounding::same(6.0))
-                .stroke(Stroke::new(1.0_f32, theme::BORDER_ELEVATED))
-                .inner_margin(Margin::symmetric(10.0, 7.0))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    if !lang.is_empty() {
-                        ui.label(
-                            RichText::new(lang)
-                                .monospace()
-                                .size(10.0)
-                                .color(theme::TEXT_MUTED),
-                        );
-                        ui.add_space(2.0);
-                    }
-                    egui::ScrollArea::horizontal()
-                        .id_salt(("md_code", i, code.len()))
-                        .show(ui, |ui| {
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                            ui.label(
-                                RichText::new(&code)
-                                    .font(FontId::monospace(11.5))
-                                    .color(theme::TEXT_PRIMARY),
-                            );
-                        });
-                });
-            ui.add_space(5.0);
-            continue;
-        }
-
-        // Horizontal rule
-        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-            ui.add_space(3.0);
-            ui.separator();
-            ui.add_space(3.0);
-            i += 1;
-            continue;
-        }
-
-        // Headings (# .. ####)
-        if let Some((level, heading)) = parse_heading(trimmed) {
-            let (size, color) = match level {
-                1 => (base_size + 4.5, Color32::WHITE),
-                2 => (base_size + 2.5, Color32::WHITE),
-                3 => (base_size + 1.0, theme::ACCENT_CYAN),
-                _ => (base_size + 0.5, theme::TEXT_PRIMARY),
-            };
-            ui.add_space(4.0);
-            ui.label(RichText::new(heading).size(size).strong().color(color));
-            if level <= 2 {
-                ui.separator();
-            }
-            ui.add_space(2.0);
-            i += 1;
-            continue;
-        }
-
-        // Markdown table block
-        if trimmed.starts_with('|') && trimmed.ends_with('|') {
-            let mut rows: Vec<Vec<String>> = Vec::new();
-            while i < lines.len() {
-                let row_t = lines[i].trim();
-                if !(row_t.starts_with('|') && row_t.ends_with('|')) {
-                    break;
-                }
-                let cells: Vec<String> = row_t
-                    .trim_matches('|')
-                    .split('|')
-                    .map(|c| c.trim().to_string())
-                    .collect();
-                let is_sep = !cells.is_empty()
-                    && cells
-                        .iter()
-                        .all(|c| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':' | ' ')));
-                if !is_sep {
-                    rows.push(cells);
-                }
-                i += 1;
-            }
-            if !rows.is_empty() {
-                egui::Frame::none()
-                    .fill(theme::BG_SURFACE)
-                    .rounding(Rounding::same(6.0))
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
-                    .inner_margin(Margin::symmetric(8.0, 6.0))
-                    .show(ui, |ui| {
-                        egui::Grid::new(("md_table", i, rows.len()))
-                            .striped(true)
-                            .spacing([14.0, 4.0])
-                            .show(ui, |ui| {
-                                for (r_idx, row) in rows.iter().enumerate() {
-                                    for cell in row {
-                                        if r_idx == 0 {
-                                            ui.label(
-                                                RichText::new(cell)
-                                                    .size(base_size - 0.5)
-                                                    .strong()
-                                                    .color(Color32::WHITE),
-                                            );
-                                        } else {
-                                            render_inline_md(ui, cell, base_size - 0.5);
-                                        }
-                                    }
-                                    ui.end_row();
-                                }
-                            });
-                    });
-                ui.add_space(5.0);
-            }
-            continue;
-        }
-
-        // Blockquote (> ...)
-        if let Some(quoted) = trimmed.strip_prefix("> ").or_else(|| trimmed.strip_prefix('>')) {
-            let mut quote_lines = vec![quoted.trim()];
-            i += 1;
-            while i < lines.len() {
-                let qt = lines[i].trim();
-                if let Some(q) = qt.strip_prefix("> ").or_else(|| qt.strip_prefix('>')) {
-                    quote_lines.push(q.trim());
-                    i += 1;
-                } else {
-                    break;
-                }
-            }
-            egui::Frame::none()
-                .fill(theme::BG_SURFACE)
-                .rounding(Rounding::same(5.0))
-                .stroke(Stroke::new(1.0_f32, theme::ACCENT_CYAN.linear_multiply(0.5)))
-                .inner_margin(Margin::symmetric(10.0, 6.0))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    for ql in quote_lines {
-                        render_inline_md(ui, ql, base_size - 0.5);
-                    }
-                });
-            ui.add_space(4.0);
-            continue;
-        }
-
-        // Task list (- [x] / - [ ])
-        let indent_spaces = line.len() - line.trim_start().len();
-        let indent_px = ((indent_spaces / 2) as f32 * 14.0).min(42.0);
-        if let Some((checked, rest)) = parse_task_item(trimmed) {
-            ui.horizontal(|ui| {
-                ui.add_space(indent_px);
-                if checked {
-                    ui.label(
-                        RichText::new("✓")
-                            .size(base_size)
-                            .strong()
-                            .color(theme::ACCENT_GREEN),
-                    );
-                } else {
-                    ui.label(
-                        RichText::new("□")
-                            .size(base_size)
-                            .color(theme::TEXT_MUTED),
-                    );
-                }
-                render_inline_md(ui, rest, base_size);
-            });
-            i += 1;
-            continue;
-        }
-
-        // Unordered bullet list (- / * / +)
-        if let Some(rest) = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
-            .or_else(|| trimmed.strip_prefix("+ "))
-        {
-            ui.horizontal(|ui| {
-                ui.add_space(indent_px + 4.0);
-                ui.label(
-                    RichText::new("•")
-                        .size(base_size)
-                        .color(theme::ACCENT_CYAN),
-                );
-                render_inline_md(ui, rest, base_size);
-            });
-            i += 1;
-            continue;
-        }
-
-        // Ordered numbered list (1. ...)
-        if let Some((num_lbl, rest)) = parse_ordered_list_prefix(trimmed) {
-            ui.horizontal(|ui| {
-                ui.add_space(indent_px + 4.0);
-                ui.label(
-                    RichText::new(num_lbl)
-                        .size(base_size)
-                        .color(theme::ACCENT_CYAN),
-                );
-                render_inline_md(ui, rest, base_size);
-            });
-            i += 1;
-            continue;
-        }
-
-        // Normal paragraph line with inline markdown
-        render_inline_md(ui, trimmed, base_size);
-        i += 1;
-    }
-}
-
-fn parse_heading(line: &str) -> Option<(usize, &str)> {
-    let hashes = line.bytes().take_while(|&b| b == b'#').count();
-    if (1..=6).contains(&hashes) {
-        let rest = line[hashes..].strip_prefix(' ')?;
-        Some((hashes, rest.trim()))
-    } else {
-        None
-    }
-}
-
-fn parse_task_item(trimmed: &str) -> Option<(bool, &str)> {
-    for prefix in ["- [x] ", "- [X] ", "* [x] ", "* [X] "] {
-        if let Some(rest) = trimmed.strip_prefix(prefix) {
-            return Some((true, rest));
-        }
-    }
-    for prefix in ["- [ ] ", "* [ ] "] {
-        if let Some(rest) = trimmed.strip_prefix(prefix) {
-            return Some((false, rest));
-        }
-    }
-    None
-}
-
-fn parse_ordered_list_prefix(trimmed: &str) -> Option<(&str, &str)> {
-    let digits = trimmed.bytes().take_while(|b| b.is_ascii_digit()).count();
-    if digits == 0 || digits > 3 {
-        return None;
-    }
-    let after = &trimmed[digits..];
-    let rest = after.strip_prefix(". ")?;
-    Some((&trimmed[..digits + 1], rest))
-}
-
-/// Renders inline Markdown (`**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[text](url)`).
-fn render_inline_md(ui: &mut egui::Ui, text: &str, base_size: f32) {
-    // Extract clickable markdown links so clicking opens them in the browser
-    let mut job = LayoutJob::default();
-    let mut links: Vec<(String, String)> = Vec::new();
-    let bytes = text.as_bytes();
-    let mut i = 0;
-
-    let normal_fmt = TextFormat {
-        font_id: FontId::proportional(base_size),
-        color: theme::TEXT_PRIMARY,
-        ..Default::default()
-    };
-    let bold_fmt = TextFormat {
-        font_id: FontId::proportional(base_size),
-        color: Color32::WHITE,
-        ..Default::default()
-    };
-    let italic_fmt = TextFormat {
-        font_id: FontId::proportional(base_size),
-        color: theme::TEXT_SECONDARY,
-        italics: true,
-        ..Default::default()
-    };
-    let strike_fmt = TextFormat {
-        font_id: FontId::proportional(base_size),
-        color: theme::TEXT_MUTED,
-        strikethrough: Stroke::new(1.0_f32, theme::TEXT_MUTED),
-        ..Default::default()
-    };
-    let code_fmt = TextFormat {
-        font_id: FontId::monospace((base_size - 0.5).max(10.5)),
-        color: theme::ACCENT_CYAN,
-        background: theme::BG_SURFACE,
-        ..Default::default()
-    };
-    let link_fmt = TextFormat {
-        font_id: FontId::proportional(base_size),
-        color: theme::ACCENT_CYAN,
-        underline: Stroke::new(1.0_f32, theme::ACCENT_CYAN),
-        ..Default::default()
-    };
-
-    let mut plain_start = 0;
-    let flush_plain = |job: &mut LayoutJob, start: usize, end: usize| {
-        if end > start {
-            job.append(&text[start..end], 0.0, normal_fmt.clone());
-        }
-    };
-
-    while i < bytes.len() {
-        // Inline code `...`
-        if bytes[i] == b'`' {
-            if let Some(rel_end) = text[i + 1..].find('`') {
-                flush_plain(&mut job, plain_start, i);
-                let code = &text[i + 1..i + 1 + rel_end];
-                job.append(&format!(" {code} "), 0.0, code_fmt.clone());
-                i = i + 2 + rel_end;
-                plain_start = i;
-                continue;
-            }
-        }
-        // Bold **...**
-        if text[i..].starts_with("**") {
-            if let Some(rel_end) = text[i + 2..].find("**") {
-                flush_plain(&mut job, plain_start, i);
-                job.append(&text[i + 2..i + 2 + rel_end], 0.0, bold_fmt.clone());
-                i = i + 4 + rel_end;
-                plain_start = i;
-                continue;
-            }
-        }
-        // Strikethrough ~~...~~
-        if text[i..].starts_with("~~") {
-            if let Some(rel_end) = text[i + 2..].find("~~") {
-                flush_plain(&mut job, plain_start, i);
-                job.append(&text[i + 2..i + 2 + rel_end], 0.0, strike_fmt.clone());
-                i = i + 4 + rel_end;
-                plain_start = i;
-                continue;
-            }
-        }
-        // Markdown link [label](url) or image ![alt](url)
-        let is_img = bytes[i] == b'!' && text[i..].starts_with("![");
-        if bytes[i] == b'[' || is_img {
-            let open_br = if is_img { i + 1 } else { i };
-            if let Some(close_br_rel) = text[open_br + 1..].find("](") {
-                let url_start = open_br + 1 + close_br_rel + 2;
-                if let Some(url_end_rel) = text[url_start..].find(')') {
-                    let label = &text[open_br + 1..open_br + 1 + close_br_rel];
-                    let url = &text[url_start..url_start + url_end_rel];
-                    if url.starts_with("http://") || url.starts_with("https://") {
-                        flush_plain(&mut job, plain_start, i);
-                        let shown = if label.is_empty() { url } else { label };
-                        job.append(shown, 0.0, link_fmt.clone());
-                        links.push((shown.to_string(), url.to_string()));
-                        i = url_start + url_end_rel + 1;
-                        plain_start = i;
-                        continue;
-                    }
-                }
-            }
-        }
-        // Italic *...* (single asterisk, not followed by space)
-        if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] != b' ' && bytes[i + 1] != b'*' {
-            if let Some(rel_end) = text[i + 1..].find('*') {
-                if rel_end > 0 {
-                    flush_plain(&mut job, plain_start, i);
-                    job.append(&text[i + 1..i + 1 + rel_end], 0.0, italic_fmt.clone());
-                    i = i + 2 + rel_end;
-                    plain_start = i;
-                    continue;
-                }
-            }
-        }
-        // Advance to next UTF-8 char boundary
-        let ch_len = text[i..].chars().next().map_or(1, char::len_utf8);
-        i += ch_len;
-    }
-    flush_plain(&mut job, plain_start, bytes.len());
-
-    let resp = ui.label(job);
-    if links.len() == 1 {
-        let url = &links[0].1;
-        if resp
-            .on_hover_text(url)
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .clicked()
-        {
-            let _ = webbrowser::open(url);
-        }
-    } else if links.len() > 1 {
-        ui.horizontal_wrapped(|ui| {
-            for (lbl, url) in links {
-                if ui
-                    .small_button(RichText::new(format!("→ {lbl}")).color(theme::ACCENT_CYAN))
-                    .on_hover_text(&url)
-                    .clicked()
-                {
-                    let _ = webbrowser::open(&url);
-                }
-            }
-        });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_markdown_vs_plain_text() {
-        assert!(looks_like_markdown("## Summary\n- item 1"));
-        assert!(looks_like_markdown("Fixes **auth** bug with `token`"));
-        assert!(looks_like_markdown("```rust\nfn main() {}\n```"));
-        assert!(!looks_like_markdown("Simple plain text description."));
-    }
-
-    #[test]
-    fn strips_html_template_comments() {
-        let src = "<!-- fill this out -->\n## Summary\nHello";
-        assert_eq!(strip_html_comments(src).trim(), "## Summary\nHello");
-    }
 }
