@@ -2,7 +2,8 @@ pub mod bitbucket;
 pub mod github;
 pub mod gitlab;
 
-use std::process::Command;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -94,24 +95,86 @@ impl ProviderAuth {
     }
 }
 
-#[allow(unused_mut)]
-fn run_cli_token(program: &str, args: &[&str]) -> Option<String> {
-    let mut cmd = Command::new(program);
-    cmd.args(args);
+fn cli_candidate_paths(program: &str) -> Vec<PathBuf> {
+    let mut candidates = vec![PathBuf::from(program)];
+
+    #[cfg(unix)]
+    {
+        for dir in [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/opt/local/bin",
+            "/home/linuxbrew/.linuxbrew/bin",
+            "/snap/bin",
+        ] {
+            let p = PathBuf::from(dir).join(program);
+            if p.is_file() {
+                candidates.push(p);
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            for rel in [".local/bin", "bin"] {
+                let p = PathBuf::from(&home).join(rel).join(program);
+                if p.is_file() {
+                    candidates.push(p);
+                }
+            }
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
-        cmd.creation_flags(0x0800_0000);
+        let exe_name = format!("{program}.exe");
+        if let Some(pf) = std::env::var_os("ProgramFiles") {
+            let p = PathBuf::from(pf).join("GitHub CLI").join(&exe_name);
+            if p.is_file() {
+                candidates.push(p);
+            }
+        }
+        if let Some(local) = std::env::var_os("LocalAppData") {
+            let p = PathBuf::from(local)
+                .join("Programs")
+                .join("GitHub CLI")
+                .join(&exe_name);
+            if p.is_file() {
+                candidates.push(p);
+            }
+        }
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            let p = PathBuf::from(home).join("scoop").join("shims").join(&exe_name);
+            if p.is_file() {
+                candidates.push(p);
+            }
+        }
     }
-    let out = cmd.output().ok()?;
-    if !out.status.success() {
-        return None;
+
+    candidates
+}
+
+#[allow(unused_mut)]
+fn run_cli_token(program: &str, args: &[&str]) -> Option<String> {
+    for bin in cli_candidate_paths(program) {
+        let mut cmd = Command::new(&bin);
+        cmd.args(args)
+            .env("GH_PROMPT_DISABLED", "1")
+            .stdin(Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            cmd.creation_flags(0x0800_0000);
+        }
+        let Ok(out) = cmd.output() else {
+            continue;
+        };
+        if !out.status.success() {
+            // Binary ran and explicitly failed (e.g. not logged in); no need to retry
+            return None;
+        }
+        let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !token.is_empty() {
+            return Some(token);
+        }
     }
-    let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token)
-    }
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
