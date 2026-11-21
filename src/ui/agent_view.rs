@@ -133,7 +133,10 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut app.search_query)
                             .desired_width(w)
-                            .hint_text("Filter files, stashes... (Cmd+F)"),
+                            .hint_text(format!(
+                                "Filter files, stashes... ({}+F)",
+                                crate::i18n::MOD_KEY
+                            )),
                     );
                     if app.focus_search {
                         resp.request_focus();

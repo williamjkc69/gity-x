@@ -1,3 +1,21 @@
+#[cfg(target_os = "macos")]
+pub const MOD_KEY: &str = "Cmd";
+#[cfg(not(target_os = "macos"))]
+pub const MOD_KEY: &str = "Ctrl";
+
+#[cfg(target_os = "macos")]
+macro_rules! with_mod {
+    ($pre:expr, $post:expr) => {
+        concat!($pre, "Cmd", $post)
+    };
+}
+#[cfg(not(target_os = "macos"))]
+macro_rules! with_mod {
+    ($pre:expr, $post:expr) => {
+        concat!($pre, "Ctrl", $post)
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
     En,
@@ -241,7 +259,7 @@ pub const EN: Strings = Strings {
     pop: "Pop",
     refresh: "Refresh",
     settings: "Settings",
-    search_hint: "Search commits, author, hash, ref... (Cmd+F)",
+    search_hint: with_mod!("Search commits, author, hash, ref... (", "+F)"),
     local_branches: "LOCAL",
     remote_branches: "REMOTES",
     tags: "TAGS",
@@ -315,8 +333,8 @@ pub const EN: Strings = Strings {
     base_ref_label: "Base (branch, tag or commit):",
     current_head: "Current HEAD",
     branch_name: "New branch name:",
-    toggle_left_sidebar: "Toggle left sidebar (Cmd+B)",
-    toggle_right_sidebar: "Toggle inspector panel (Cmd+I)",
+    toggle_left_sidebar: with_mod!("Toggle left sidebar (", "+B)"),
+    toggle_right_sidebar: with_mod!("Toggle inspector panel (", "+I)"),
     create_tag_title: "Create Tag",
     tag_name: "Tag name:",
     tag_message_opt: "Message (optional, annotated tag):",
@@ -362,7 +380,7 @@ pub const EN: Strings = Strings {
     agent_review_title: "Working Changes",
     agent_untracked: "UNTRACKED",
     agent_clean_title: "Working tree is clean",
-    agent_clean_sub: "No uncommitted files, untracked files, or stashes selected. Press Refresh (Cmd+R) anytime.",
+    agent_clean_sub: with_mod!("No uncommitted files, untracked files, or stashes selected. Press Refresh (", "+R) anytime."),
     agent_split: "Split",
     agent_unified: "Unified",
     agent_all_files: "All Files",
@@ -371,7 +389,7 @@ pub const EN: Strings = Strings {
     agent_accepted: "Unstage",
     agent_revert: "Discard",
     agent_quick_commit_hint: "Commit message...",
-    maximize_changes: "Maximize changes view (Agent Mode — Cmd+E)",
+    maximize_changes: with_mod!("Maximize changes view (Agent Mode — ", "+E)"),
     error_modal_title: "Git Error",
     error_details_label: "Full output",
     copy_btn: "Copy",
@@ -433,7 +451,7 @@ pub const ES: Strings = Strings {
     pop: "Pop",
     refresh: "Actualizar",
     settings: "Ajustes",
-    search_hint: "Buscar commits, autor, hash, rama... (Cmd+F)",
+    search_hint: with_mod!("Buscar commits, autor, hash, rama... (", "+F)"),
     local_branches: "LOCALES",
     remote_branches: "REMOTAS",
     tags: "TAGS",
@@ -507,8 +525,8 @@ pub const ES: Strings = Strings {
     base_ref_label: "Base (rama, tag o commit):",
     current_head: "HEAD actual",
     branch_name: "Nombre de la nueva rama:",
-    toggle_left_sidebar: "Mostrar/ocultar panel izquierdo (Cmd+B)",
-    toggle_right_sidebar: "Mostrar/ocultar inspector (Cmd+I)",
+    toggle_left_sidebar: with_mod!("Mostrar/ocultar panel izquierdo (", "+B)"),
+    toggle_right_sidebar: with_mod!("Mostrar/ocultar inspector (", "+I)"),
     create_tag_title: "Crear tag",
     tag_name: "Nombre del tag:",
     tag_message_opt: "Mensaje (opcional, tag anotado):",
@@ -554,7 +572,7 @@ pub const ES: Strings = Strings {
     agent_review_title: "Cambios Locales",
     agent_untracked: "SIN SEGUIMIENTO (UNTRACKED)",
     agent_clean_title: "Sin cambios pendientes",
-    agent_clean_sub: "No hay archivos sin confirmar, untracked ni stashes seleccionados. Usa Actualizar (Cmd+R).",
+    agent_clean_sub: with_mod!("No hay archivos sin confirmar, untracked ni stashes seleccionados. Usa Actualizar (", "+R)."),
     agent_split: "Dividido",
     agent_unified: "Unificado",
     agent_all_files: "Todos",
@@ -563,7 +581,7 @@ pub const ES: Strings = Strings {
     agent_accepted: "Unstage",
     agent_revert: "Descartar",
     agent_quick_commit_hint: "Mensaje del commit...",
-    maximize_changes: "Maximizar vista de cambios (Agent Mode — Cmd+E)",
+    maximize_changes: with_mod!("Maximizar vista de cambios (Agent Mode — ", "+E)"),
     error_modal_title: "Error de Git",
     error_details_label: "Detalle completo",
     copy_btn: "Copiar",

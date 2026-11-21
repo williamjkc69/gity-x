@@ -71,7 +71,7 @@ pub fn supports_in_place_install() -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        std::env::var_os("APPIMAGE").is_some() || !cfg!(debug_assertions)
+        std::env::var_os("APPIMAGE").is_some()
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {

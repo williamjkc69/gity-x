@@ -4,7 +4,7 @@ use eframe::egui::{self, Color32, Margin, RichText, Rounding, Stroke};
 
 use crate::app::{app_logo_image, GitKrakenApp, ViewMode};
 use crate::config::{CommitOrder, GraphStyle};
-use crate::i18n::{humanize_git_error, Language};
+use crate::i18n::{humanize_git_error, Language, MOD_KEY};
 use crate::theme;
 use crate::updater::{self, UpdateState};
 
@@ -146,7 +146,7 @@ pub fn show_tabs(ctx: &egui::Context, app: &mut GitKrakenApp) {
                                                 )
                                                 .frame(false),
                                             )
-                                            .on_hover_text("Close tab (Cmd+W)")
+                                            .on_hover_text(format!("Close tab ({MOD_KEY}+W)"))
                                             .clicked()
                                         {
                                             close_idx = Some(idx);
@@ -177,7 +177,9 @@ pub fn show_tabs(ctx: &egui::Context, app: &mut GitKrakenApp) {
                                 egui::Button::new(RichText::new("+").strong().size(13.0))
                                     .min_size(egui::vec2(24.0, 22.0)),
                             )
-                            .on_hover_text("Open repository in new tab (Cmd+N / Cmd+O)")
+                            .on_hover_text(format!(
+                                "Open repository in new tab ({MOD_KEY}+N / {MOD_KEY}+O)"
+                            ))
                             .clicked()
                         {
                             open_new = true;
@@ -606,7 +608,7 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                         .rounding(Rounding::same(7.0))
                         .min_size(egui::vec2(0.0, 26.0));
 
-                        if ui.add(agent_btn).on_hover_text("Cmd+E").clicked() {
+                        if ui.add(agent_btn).on_hover_text(format!("{MOD_KEY}+E")).clicked() {
                             app.set_view_mode(ViewMode::Agent, Some(ctx.clone()));
                         }
 
@@ -639,7 +641,7 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                         .rounding(Rounding::same(7.0))
                         .min_size(egui::vec2(0.0, 26.0));
 
-                        if ui.add(pr_btn).on_hover_text("Cmd+P").clicked() {
+                        if ui.add(pr_btn).on_hover_text(format!("{MOD_KEY}+P")).clicked() {
                             app.set_view_mode(ViewMode::PullRequests, Some(ctx.clone()));
                         }
 
@@ -814,7 +816,7 @@ pub fn show(ctx: &egui::Context, app: &mut GitKrakenApp) {
                                     egui::Button::new("↻")
                                         .min_size(egui::vec2(26.0, 26.0)),
                                 )
-                                .on_hover_text(format!("{} (Cmd+R)", t.refresh))
+                                .on_hover_text(format!("{} ({MOD_KEY}+R)", t.refresh))
                                 .clicked()
                             {
                                 app.refresh();
@@ -1494,7 +1496,7 @@ fn show_settings_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
                         .add(
                             egui::TextEdit::singleline(&mut app.config.bitbucket_user)
                                 .desired_width(210.0)
-                                .hint_text("username (empty = Bearer)"),
+                                .hint_text("email/user (empty = Bearer)"),
                         )
                         .changed()
                     {
@@ -1554,19 +1556,22 @@ fn show_shortcuts_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
     let mut close_now = false;
 
     let rows = [
-        ("Cmd + O / Cmd + N", "Open repository in new tab"),
-        ("Cmd + W", "Close active tab"),
-        ("Cmd + 1..9", "Switch to tab 1–9"),
-        ("Ctrl + Tab", "Next repository tab"),
-        ("Cmd + E", "Switch Git Graph / Agent Mode"),
-        ("Cmd + P", "Switch to Pull Requests"),
-        ("Cmd + R", "Refresh repository"),
-        ("Cmd + F", "Focus search / filter"),
-        ("Cmd + B", "Toggle left sidebar"),
-        ("Cmd + I", "Toggle right inspector"),
-        ("Cmd + ,", "Open Settings"),
-        ("Cmd + /", "Open Keyboard Shortcuts"),
-        ("Esc", "Close active modal"),
+        (
+            format!("{MOD_KEY} + O / {MOD_KEY} + N"),
+            "Open repository in new tab",
+        ),
+        (format!("{MOD_KEY} + W"), "Close active tab"),
+        (format!("{MOD_KEY} + 1..9"), "Switch to tab 1–9"),
+        ("Ctrl + Tab".to_string(), "Next repository tab"),
+        (format!("{MOD_KEY} + E"), "Switch Git Graph / Agent Mode"),
+        (format!("{MOD_KEY} + P"), "Switch to Pull Requests"),
+        (format!("{MOD_KEY} + R"), "Refresh repository"),
+        (format!("{MOD_KEY} + F"), "Focus search / filter"),
+        (format!("{MOD_KEY} + B"), "Toggle left sidebar"),
+        (format!("{MOD_KEY} + I"), "Toggle right inspector"),
+        (format!("{MOD_KEY} + ,"), "Open Settings"),
+        (format!("{MOD_KEY} + /"), "Open Keyboard Shortcuts"),
+        ("Esc".to_string(), "Close active modal"),
     ];
 
     egui::Window::new("Keyboard Shortcuts — gity x")
@@ -1666,8 +1671,13 @@ fn show_about_modal(ctx: &egui::Context, app: &mut GitKrakenApp) {
                     .color(theme::TEXT_PRIMARY),
                 );
                 ui.add_space(8.0);
+                let cfg_path_label = if cfg!(target_os = "windows") {
+                    "Config: %APPDATA%\\gity-x\\config.txt"
+                } else {
+                    "Config: ~/.config/gity-x/config.txt"
+                };
                 ui.label(
-                    RichText::new("Config: ~/.config/gity-x/config.txt")
+                    RichText::new(cfg_path_label)
                         .monospace()
                         .size(11.0)
                         .color(theme::TEXT_MUTED),

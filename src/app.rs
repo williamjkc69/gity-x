@@ -553,7 +553,7 @@ impl GitKrakenApp {
             .filter(|p| p.exists())
         {
             dialog = dialog.set_directory(parent);
-        } else if let Some(home) = std::env::var_os("HOME") {
+        } else if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
             let code_dir = PathBuf::from(home).join("code");
             if code_dir.exists() {
                 dialog = dialog.set_directory(code_dir);
